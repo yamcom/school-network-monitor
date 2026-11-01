@@ -9,9 +9,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 # 如果 CSV 在專案根目錄，或是直接放在 config 目錄下皆能自動找到
 PROJECT_ROOT = SCRIPT_DIR.parent
 csv_candidates = [
-    PROJECT_ROOT / "Switch_20261024144549.csv",
-    SCRIPT_DIR / "Switch_20261024144549.csv",
-    Path("Switch_20261024144549.csv"),
+    PROJECT_ROOT / "sample_switchs.csv",
+    SCRIPT_DIR / "sample_switchs.csv",
+    Path("sample_switchs.csv"),
 ]
 
 input_csv = None
@@ -21,7 +21,7 @@ for p in csv_candidates:
         break
 
 if not input_csv:
-    raise FileNotFoundError("找不到來源 CSV 檔 Switch_20261024144549.csv，請確認檔案位置！")
+    raise FileNotFoundError("找不到來源 CSV 檔 sample_switchs.csv，請確認檔案位置！")
 
 # 輸出路徑固定輸出至 config/switches.yaml
 output_yaml = SCRIPT_DIR / "switches.yaml"

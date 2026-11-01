@@ -1,0 +1,38 @@
+﻿Name,IP,Secondary IP,MAC,Model,Vendor,Type,sort,Version,Public Community,Private Community,UP Link Port Number,location
+Switch.116,192.69.1.116,,C0:C5:20:84:B0:69,ICX-7150,Ruckus,2,1,2,SnmpPublic@TPC,SnmpPublic@TPC,0,仁愛樓新機櫃
+Switch.117,192.69.1.117,,D4:C1:9E:50:CF:00,ICX-7150,Ruckus,2,1,2,SnmpPublic@TPC,SnmpPublic@TPC,0,建國樓新機櫃
+Switch.118,192.69.1.118,,60:9C:9F:E7:9D:58,ICX-7150,Ruckus,2,1,2,SnmpPublic@TPC,SnmpPublic@TPC,0,信義樓新機櫃
+Switch.119,192.69.1.119,,1C:5F:2B:29:2C:20,DGS-1210-28X,Dlink,2,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,新生樓新機櫃
+Aruba-102,192.69.1.102,,B8:83:03:2A:6E:80,JL072A 3810M-48G-1-slot Switch,Aruba,2,1,2,SnmpPublic@TPC,SnmpPublic@TPC,0,仁愛樓舊機櫃(備援)
+Aruba.106,192.69.1.106,,F8:60:F0:6E:E5:00,JL072A 3810M-48G-1-slot Switch,Aruba,2,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,信義樓舊機櫃(備援)
+Aruba-104,192.69.1.104,,F8:60:F0:6E:33:80,JL072A 3810M-48G-1-slot Switch,Aruba,2,1,2,SnmpPublic@TPC,SnmpPublic@TPC,0,建國樓舊機櫃(備援)
+Aruba.108,192.69.1.108,,F8:60:F0:6E:A2:80,JL072A 3810M-48G-1-slot Switch,Aruba,2,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,新生樓舊機櫃(備援)
+POE-1.15,172.16.1.15,,04:01:A1:D4:2C:BC,FS-148F-FPOE,Fortinet,1,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,仁愛樓新機櫃(無線)
+POE-1.16,172.16.1.16,,D4:C1:9E:44:14:00,ICX7150-24-POE,Brocade,1,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,建國樓新機櫃(無線)
+POE-1.18,172.16.1.18,,D4:C1:9E:44:5E:A0,ICX7150-24-POE,Ruckus,1,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,新生樓新機櫃(無線)
+POE-1.17,172.16.1.17,,D4:C1:9E:44:2D:60,ICX7150-24-POE,Ruckus,1,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,信義樓新機櫃(無線)
+POE-1.11,172.16.1.11,,70:CA:97:1C:9A:A0,ICX7150-24-POE,Ruckus,1,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,信義樓舊機櫃(無線)
+Cisco,192.69.1.110,,28:94:0F:9E:B7:00,C3560E-UNIVERSALK9-M,Cisco,2,1,2,SnmpPublic@TPC,SnmpPublic@TPC,0,資訊機房
+Brocade.101,192.69.1.101,,60:9C:9F:E7:58:E0,ICX7150-48,Brocade,2,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,仁愛樓舊機櫃
+Brocade.105,192.69.1.105,,60:9C:9F:E7:75:F8,ICX7150-48,Brocade,2,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,信義樓舊機櫃
+Brocade.103,192.69.1.103,,60:9C:9F:E7:98:50,ICX7150-48,Brocade,2,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,建國樓舊機櫃
+Brocade.107,192.69.1.107,,60:9C:9F:E7:B3:A8,ICX7150-48,Brocade,2,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,新生樓舊機櫃
+Dlink-90,192.69.1.90,,3C:33:32:2E:D8:20,DGS-1510-28X,Dlink,1,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,資訊中心
+Dlink-92,192.69.1.92,,3C:33:32:2E:D7:00,DGS-1510-28X,Dlink,1,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,仁愛樓學務處
+Dlink-91,192.69.1.91,,3C:33:32:2E:D6:E0,DGS-1510-28X,Dlink,1,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,仁愛樓教務處
+Dlink-93,192.69.1.93,,3C:33:32:2E:D7:E0,DGS-1510-28X,Dlink,1,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,仁愛樓總務處
+DLink-94,192.69.1.94,,3C:33:32:2E:D8:60,DGS-1510-28X,Dlink,1,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,仁愛樓輔導室
+Ruckus.84,192.69.1.84,,50:A7:33:55:0E:00,7150-48,Ruckus,2,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,仁愛樓巡迴教師辦公室
+Dlink.98,192.69.1.98,,B8:A3:86:29:6B:C8,Dlink 3120-48-TC,Dlink,2,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,仁愛樓2樓電腦教室
+POE-1.12,172.16.1.12,,D8:94:03:42:83:2C,1920-24G-PoE+ (370W),Aruba,1,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,建國樓舊機櫃(無線)
+POE-1.14,172.16.1.14,,D0:7E:28:5F:52:63,HPE 1910-8G-PoE+ (180W),Ruckus,1,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,新生樓舊機櫃(無線)
+Ruckus.99,192.69.1.99,,50:A7:33:55:0D:C8,7150-48,Ruckus,1,1,2,private,private,,三樓電腦教室
+Ruckus.100,192.69.1.100,,10:F0:68:01:CD:E0,7150-24,Ruckus,1,1,2,public,private,,C403資優班
+Dlink.85,192.69.1.85,,90:8D:78:AD:C3:66,DGS-1100-10MPP,Dlink,1,1,2,public,private,,幼兒園圖書室
+D-link.97,192.69.1.97,,DC:EA:E7:2D:72:E2,DGS1100-24,Dlink,1,1,2,SnmpPublic@TPC,private,,家長會辦公室
+D-link.96,192.69.1.96,,DC:EA:E7:2D:88:6A,DGS1100-24,Dlink,1,1,2,SnmpPublic@TPC,private,,信義樓教師研究室C335
+POE-1.13,172.16.1.13,,D0:09:C8:B0:FA:80,Cisco C9200-24P,Cisco,1,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,仁愛樓舊機櫃(無線)
+DXS-1210-12SC 10G,172.16.1.9,,DC:EA:E7:5D:4C:A8,DXS-1210-12SC 10G,Dlink,1,1,2,public,private,,機房無線core
+HAPS_PA1420,192.69.1.254,,00:DA:27:7F:A2:24,PaloAlto PA-1420,,3,0,2,SumpPublic@TPC,SnmpPublic@TPC,10,機房
+C_Switch.115,192.69.1.115,,60:9C:9F:B5:04:89,CX8100-48P,Aruba,1,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,機房有線core_switch
+Ruckus.79,192.69.1.79,,,7150-24,Ruckus,1,1,2,SnmpPublic@TPC,SnmpPublic@TPC,,警衛室

@@ -1,0 +1,30 @@
+switches:
+  - management_ip: "192.168.10.1"
+    name: "CORE-SW-ArubaCX8100"
+    vendor: "Aruba"
+    model: "CX8100"
+    adapter: "standard_mib"
+    enabled: true
+    uplink_ports:
+      - "1/1/48"
+      - "1/1/49"
+      - "1/1/50"
+
+  - management_ip: "192.168.10.11"
+    name: "ACC-SW-ICX7150-1F"
+    vendor: "Ruckus"
+    model: "ICX7150-48"
+    adapter: "standard_mib"
+    enabled: true
+    uplink_ports:
+      - "1/2/1"
+
+  - management_ip: "192.168.10.12"
+    name: "ACC-SW-HPE1920-2F"
+    vendor: "HPE"
+    model: "1920-24G"
+    adapter: "standard_mib"
+    snmp_version: "2c"
+    enabled: true
+    uplink_ports:
+      - "GigabitEthernet1/0/24"

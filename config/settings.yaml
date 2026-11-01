@@ -1,0 +1,99 @@
+app:
+  log_level: INFO
+  name: school-network-monitor
+  timezone: Asia/Taipei
+capture:
+  enabled: true
+  filter: udp and (port 67 or port 68)
+  interface: \Device\NPF_{73456D91-2551-4F14-AA3E-F8C558D08E01}
+database:
+  path: data/network_monitor.db
+dhcp:
+  authorized_servers:
+  - 192.69.1.9
+  - 192.69.1.254
+  - 192.69.6.41
+  - 192.69.6.101
+  scope_rules:
+  - allowed_servers:
+    - 192.69.6.41
+    group_name: 電腦教室-二樓
+    macs:
+    - E0:73:E7:13:16:28
+    - E0:73:E7:13:15:E8
+    - E0:73:E7:13:15:C5
+    - E0:73:E7:13:18:09
+    - E0:73:E7:13:18:01
+    - E0:73:E7:13:19:13
+    - E0:73:E7:13:18:15
+    - E0:73:E7:13:15:14
+    - E0:73:E7:13:15:FB
+    - E0:73:E7:13:19:44
+    - E0:73:E7:13:17:17
+    - E0:73:E7:13:16:68
+    - E0:73:E7:13:16:1D
+    - E0:73:E7:13:16:BA
+    - E0:73:E7:13:16:17
+    - E0:73:E7:13:18:16
+    - E0:73:E7:13:12:2F
+    - E0:73:E7:13:16:0D
+    - E0:73:E7:13:15:DC
+    - E0:73:E7:13:19:37
+    - E0:73:E7:13:15:08
+    - E0:73:E7:13:11:E9
+    - E0:73:E7:13:12:3A
+    - E0:73:E7:13:17:BF
+    - E0:73:E7:13:15:CC
+    - E0:73:E7:12:FC:D9
+    - E0:73:E7:13:15:EC
+    - E0:73:E7:13:19:B7
+    - E0:73:E7:0F:DD:30
+    - E0:73:E7:13:10:62
+  - allowed_servers:
+    - 192.69.6.101
+    group_name: 電腦教室-三樓
+    macs:
+    - 30:13:8B:67:DC:50
+    - 30:13:8B:67:D3:AF
+    - 30:13:8B:67:DC:5F
+    - 30:13:8B:67:DC:28
+    - 30:13:8B:67:DB:6D
+    - 30:13:8B:67:D2:51
+    - 30:13:8B:67:D9:FB
+    - 30:13:8B:67:D9:E9
+    - 30:13:8B:67:D0:3D
+    - 30:13:8B:67:E0:77
+    - 30:13:8B:67:CE:B7
+    - 30:13:8B:63:60:E8
+    - 30:13:8B:67:D0:DD
+    - 30:13:8B:67:D9:83
+    - 30:13:8B:67:D5:54
+    - 30:13:8B:67:D0:E6
+    - 30:13:8B:67:D9:4C
+    - 30:13:8B:67:CC:6C
+    - 30:13:8B:67:D9:69
+    - 30:13:8B:67:DC:97
+    - 30:13:8B:67:D6:51
+    - 30:13:8B:67:D0:FD
+    - 30:13:8B:67:D2:8B
+    - 30:13:8B:67:D7:73
+    - 30:13:8B:67:D8:73
+    - 30:13:8B:67:D5:DA
+    - 30:13:8B:67:CE:CD
+    - 30:13:8B:67:D9:16
+    - 30:13:8B:67:DB:86
+    - 30:13:8B:67:D2:CF
+    - 30:13:8B:67:D2:94
+retention:
+  dhcp_events_days: 30
+snmp:
+  community: SnmpPublic@TPC
+  poll_interval_seconds: 180
+  retries: 1
+  timeout_seconds: 3.0
+  v3_auth_key: ''
+  v3_auth_proto: SHA
+  v3_priv_key: ''
+  v3_priv_proto: AES
+  v3_user: mon_user
+  version: 2c

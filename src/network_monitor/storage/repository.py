@@ -468,6 +468,67 @@ class NetworkRepository:
         )
         return event_id
 
+    def upsert_device_master(
+        self,
+        mac: str,
+        ip: Optional[str] = None,
+        hostname: Optional[str] = None,
+        assignment_type: str = "DHCP",
+        record_source: str = "DHCP",
+        seen_time: Optional[datetime] = None,
+    ) -> int:
+        """維護全校統一設備主檔與 IP 配發歷程 (支援 DHCP 與靜態註冊)。"""
+        clean_mac = normalize_mac(mac)
+        now = seen_time or datetime.now()
+
+        with self.db.transaction() as conn:
+            cur = conn.cursor()
+
+            # 1. 檢查 devices_current 是否已有此 MAC
+            cur.execute("SELECT device_id, hostname, current_ip FROM devices_current WHERE mac = ?", (clean_mac,))
+            row = cur.fetchone()
+
+            if row:
+                device_id = row["device_id"] if "device_id" in row.keys() else row.get("id", 1)
+                final_hostname = hostname if hostname else row["hostname"]
+                final_ip = ip if (ip and ip != "0.0.0.0") else row["current_ip"]
+
+                cur.execute("""
+                    UPDATE devices_current
+                    SET current_ip = COALESCE(?, current_ip),
+                        hostname = COALESCE(?, hostname),
+                        last_seen = ?,
+                        status = 'observed'
+                    WHERE mac = ?
+                """, (final_ip, final_hostname, now, clean_mac))
+            else:
+                cur.execute("""
+                    INSERT INTO devices_current (
+                        mac, current_ip, hostname, first_seen, last_seen, status
+                    ) VALUES (?, ?, ?, ?, ?, 'observed')
+                """, (clean_mac, ip, hostname, now, now))
+                device_id = cur.lastrowid
+
+            # 2. 若有有效 IP，更新 IP 配發歷程 (ip_history 表，若存在)
+            if ip and ip != "0.0.0.0":
+                try:
+                    cur.execute("""
+                        UPDATE ip_history
+                        SET is_current = 0, valid_until = ?
+                        WHERE device_id = ? AND is_current = 1 AND ip_address != ?
+                    """, (now, device_id, ip))
+
+                    cur.execute("""
+                        INSERT INTO ip_history (device_id, ip_address, assignment_type, valid_from, is_current)
+                        VALUES (?, ?, ?, ?, 1)
+                        ON CONFLICT DO NOTHING
+                    """, (device_id, ip, assignment_type, now))
+                except Exception:
+                    # 容錯處理：若尚未建立 ip_history 資料表則略過
+                    pass
+
+            return device_id
+
     def purge_old_dhcp_events(self, days: int) -> int:
         """清除保留天數以外的歷史 DHCP 事件。"""
         query = """
@@ -720,9 +781,3 @@ class NetworkRepository:
 
         match_str = "相符 (VERIFIED)" if is_match else "衝突 (CONFLICT)"
         return True, f"成功完成 MAC {clean_mac} 驗證，狀態: {match_str}", is_match
-
-    # ---------------------------------------------------------
-    # 設備清冊與拓樸相關方法 (upsert_device_master, get_comprehensive_export_rows, 
-    # save_topology_observations, upsert_topology_link, 告警與健康狀態等)
-    # ---------------------------------------------------------
-    # (此處保留原有的其他完整 repository 方法...)

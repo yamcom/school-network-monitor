@@ -92,19 +92,19 @@ class NetworkRepository:
                 cur = conn.cursor()
                 cur.execute(query)
                 for row in cur.fetchall():
-                    s_id = row["switch_id"] if "switch_id" in row.keys() else row.get("id")
+                    s_id = row["switch_id"] if "switch_id" in row.keys() else row["id"]
                     results.append(
                         SwitchInfo(
                             switch_id=s_id,
                             management_ip=row["management_ip"] or "",
-                            sys_name=row.get("sys_name") or "",
-                            sys_descr=row.get("sys_descr") or "",
-                            sys_object_id=row.get("sys_object_id") or "",
-                            vendor=row.get("vendor") or "",
-                            model=row.get("model") or "",
-                            adapter_name=row.get("adapter_name") or "standard_mib",
-                            poll_status=row.get("poll_status") or "offline",
-                            last_poll_time=row.get("last_poll_time"),
+                            sys_name=row["sys_name"] if "sys_name" in row.keys() else "",
+                            sys_descr=row["sys_descr"] if "sys_descr" in row.keys() else "",
+                            sys_object_id=row["sys_object_id"] if "sys_object_id" in row.keys() else "",
+                            vendor=row["vendor"] if "vendor" in row.keys() else "",
+                            model=row["model"] if "model" in row.keys() else "",
+                            adapter_name=row["adapter_name"] if "adapter_name" in row.keys() else "standard_mib",
+                            poll_status=row["poll_status"] if "poll_status" in row.keys() else "offline",
+                            last_poll_time=row["last_poll_time"] if "last_poll_time" in row.keys() else None,
                         )
                     )
         except Exception:
@@ -349,7 +349,7 @@ class NetworkRepository:
         return results
 
     # ---------------------------------------------------------
-    # DHCP Event & Lease Methods (MVP-04.1)
+    # DHCP Event & Lease Methods
     # ---------------------------------------------------------
 
     def record_dhcp_event(self, event: DHCPEvent) -> int:
@@ -390,15 +390,16 @@ class NetworkRepository:
             )
             event_id = cur.lastrowid
 
-            cur.execute("SELECT mac, hostname, current_ip, lease_status FROM devices_current WHERE mac = ?", (clean_mac,))
-            existing_dev = cur.fetchone()
+            cur.execute("SELECT * FROM devices_current WHERE mac = ?", (clean_mac,))
+            raw_row = cur.fetchone()
+            existing_dev = dict(raw_row) if raw_row else None
 
             target_ip = event.ip or event.requested_ip
-            existing_hostname = existing_dev["hostname"] if existing_dev else None
+            existing_hostname = existing_dev.get("hostname") if existing_dev else None
             final_hostname = event.hostname if event.hostname else existing_hostname
 
-            current_ip = existing_dev["current_ip"] if existing_dev else None
-            lease_status = existing_dev["lease_status"] if existing_dev else "observed"
+            current_ip = existing_dev.get("current_ip") if existing_dev else None
+            lease_status = existing_dev.get("lease_status", "observed") if existing_dev else "observed"
             lease_time_val = getattr(event, "lease_time", None)
             lease_expiry = None
 
@@ -476,22 +477,30 @@ class NetworkRepository:
         assignment_type: str = "DHCP",
         record_source: str = "DHCP",
         seen_time: Optional[datetime] = None,
-    ) -> int:
-        """維護全校統一設備主檔與 IP 配發歷程 (支援 DHCP 與靜態註冊)。"""
+    ) -> Any:
+        """維護全校統一設備主檔與 IP 配發歷程 (安全相容 sqlite3.Row)。"""
         clean_mac = normalize_mac(mac)
         now = seen_time or datetime.now()
 
         with self.db.transaction() as conn:
             cur = conn.cursor()
 
-            # 1. 檢查 devices_current 是否已有此 MAC
-            cur.execute("SELECT device_id, hostname, current_ip FROM devices_current WHERE mac = ?", (clean_mac,))
-            row = cur.fetchone()
+            cur.execute("SELECT * FROM devices_current WHERE mac = ?", (clean_mac,))
+            raw_row = cur.fetchone()
+            row = dict(raw_row) if raw_row else None
+
+            device_pk: Any = clean_mac
 
             if row:
-                device_id = row["device_id"] if "device_id" in row.keys() else row.get("id", 1)
-                final_hostname = hostname if hostname else row["hostname"]
-                final_ip = ip if (ip and ip != "0.0.0.0") else row["current_ip"]
+                if "device_id" in row:
+                    device_pk = row["device_id"]
+                elif "id" in row:
+                    device_pk = row["id"]
+                else:
+                    device_pk = row["mac"]
+
+                final_hostname = hostname if hostname else row.get("hostname")
+                final_ip = ip if (ip and ip != "0.0.0.0") else row.get("current_ip")
 
                 cur.execute("""
                     UPDATE devices_current
@@ -507,27 +516,26 @@ class NetworkRepository:
                         mac, current_ip, hostname, first_seen, last_seen, status
                     ) VALUES (?, ?, ?, ?, ?, 'observed')
                 """, (clean_mac, ip, hostname, now, now))
-                device_id = cur.lastrowid
+                device_pk = cur.lastrowid or clean_mac
 
-            # 2. 若有有效 IP，更新 IP 配發歷程 (ip_history 表，若存在)
             if ip and ip != "0.0.0.0":
                 try:
-                    cur.execute("""
-                        UPDATE ip_history
-                        SET is_current = 0, valid_until = ?
-                        WHERE device_id = ? AND is_current = 1 AND ip_address != ?
-                    """, (now, device_id, ip))
+                    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ip_history'")
+                    if cur.fetchone():
+                        cur.execute("""
+                            UPDATE ip_history
+                            SET is_current = 0, valid_until = ?
+                            WHERE device_id = ? AND is_current = 1 AND ip_address != ?
+                        """, (now, device_pk, ip))
 
-                    cur.execute("""
-                        INSERT INTO ip_history (device_id, ip_address, assignment_type, valid_from, is_current)
-                        VALUES (?, ?, ?, ?, 1)
-                        ON CONFLICT DO NOTHING
-                    """, (device_id, ip, assignment_type, now))
+                        cur.execute("""
+                            INSERT INTO ip_history (device_id, ip_address, assignment_type, valid_from, is_current)
+                            VALUES (?, ?, ?, ?, 1)
+                        """, (device_pk, ip, assignment_type, now))
                 except Exception:
-                    # 容錯處理：若尚未建立 ip_history 資料表則略過
                     pass
 
-            return device_id
+            return device_pk
 
     def purge_old_dhcp_events(self, days: int) -> int:
         """清除保留天數以外的歷史 DHCP 事件。"""
@@ -726,7 +734,6 @@ class NetworkRepository:
         resolution_status = ResolutionStatus.VERIFIED if (is_match or not fdb_entries) else ResolutionStatus.CONFLICT
         reason = "管理員實機驗證相符" if is_match else "注意：實機驗證位置與最新 FDB 觀測不符（可能已移動）"
 
-        # 觸發 N08 異常規則
         if not is_match:
             try:
                 from network_monitor.anomaly.engine import AnomalyEngine

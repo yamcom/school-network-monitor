@@ -27,10 +27,20 @@ htmlcov/
 data/*.db
 data/*.db-wal
 data/*.db-shm
-logs/*.log
+tests/.tmp/
+backups/
+dhcp_security_alerts.csv
+network_device_report.csv
+upload/stored/*
+upload/incoming/*
+upload/failed/*
+
 config/devices_import.csv
 config/school_ip_list.xlsx
 config/Switch_20261024144549.csv
 config/switches.yaml
+
+uv.lock
+.uv-cache/
 
 

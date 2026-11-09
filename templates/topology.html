@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <title>校園網路拓撲視覺化與健康診斷工作站</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Vis.js Network for interactive graph topology -->
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        #network-canvas {
+            width: 100%;
+            height: calc(100vh - 230px);
+            min-height: 580px;
+            background: #F8FAFC;
+        }
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.2rem 0.5rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 flex flex-col h-screen overflow-hidden">
+    <!-- 頂部導航列 -->
+    <header class="bg-white border-b border-slate-200 px-6 py-3 flex justify-between items-center z-10 shadow-sm shrink-0">
+        <div class="flex items-center gap-4">
+            <h1 class="text-xl font-bold text-slate-900 flex items-center gap-2">
+                <span class="text-2xl">🌐</span> 校園網路拓撲視覺化與健康診斷
+            </h1>
+            <nav class="flex gap-2 text-sm ml-4">
+                <a href="/" class="px-3 py-1.5 text-slate-600 hover:text-blue-600 hover:bg-slate-50 rounded font-medium">即時監控首頁</a>
+                <a href="/devices" class="px-3 py-1.5 text-slate-600 hover:text-blue-600 hover:bg-slate-50 rounded font-medium">電腦設備清冊</a>
+                <a href="/topology" class="px-3 py-1.5 bg-blue-50 text-blue-600 rounded font-bold border border-blue-200">實體拓撲架構</a>
+            </nav>
+        </div>
+
+        <!-- 搜尋定位與拓撲操作 -->
+        <div class="flex items-center gap-3">
+            <div class="relative w-64">
+                <input type="text" id="targetSearch" placeholder="🔍 一鍵定位 IP 或 MAC..." 
+                       class="w-full pl-3 pr-8 py-1.5 text-sm border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                       onkeydown="if(event.key==='Enter') locateTarget()">
+                <button onclick="locateTarget()" class="absolute right-2 top-2 text-slate-400 hover:text-blue-600 text-xs">GO</button>
+            </div>
+            <button onclick="openSwitchStatusModal()" class="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition shadow-sm">
+                📋 交換器連線總表
+            </button>
+            <button onclick="openSwitchesConfigModal()" class="bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition shadow-sm" title="編輯或啟用/停用 switches.yaml">
+                🛠️ 交換器設定管理 (switches.yaml)
+            </button>
+            <button onclick="openCoreNodesModal()" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition">
+                ⚙️ 核心節點設定
+            </button>
+            <button onclick="toggleLockLayout()" id="lockBtn" class="bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-300 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition shadow-sm" title="解鎖後可手動拖曳排列交換器位置">
+                🔒 佈局已鎖定 (點擊解鎖排列)
+            </button>
+            <button onclick="resetCustomPositions()" id="resetLayoutBtn" class="hidden bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold border flex items-center gap-1 transition" title="清除自訂拖曳位置，還原預設 Gateway 水平階層">
+                📐 重設預設排版
+            </button>
+            <button onclick="refreshData(true)" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold shadow-sm flex items-center gap-1 transition">
+                🔄 立即更新
+            </button>
+        </div>
+    </header>
+
+    <!-- 交換器狀態與警示計數橫幅 (嚴格互斥 5 大分類，總數相符) -->
+    <div class="bg-white px-6 py-2 border-b border-slate-200 flex flex-wrap justify-between items-center gap-4 text-xs shrink-0">
+        <!-- 5 大精準狀態計數指標 -->
+        <div class="flex items-center gap-2 flex-wrap">
+            <span class="font-bold text-slate-700 mr-1">交換器狀態計數:</span>
+            <span class="status-badge bg-emerald-50 text-emerald-700 border border-emerald-300" title="SNMP 採集完全成功且具有拓撲鄰居連線">
+                <span class="w-2 h-2 rounded-full bg-emerald-500 mr-1.5"></span> 正常: <b id="cntNormal" class="ml-1">0</b>
+            </span>
+            <span class="status-badge bg-slate-100 text-slate-700 border border-slate-300" title="SNMP 正常但在線孤立無 LLDP 鄰居 (如邊緣單機)">
+                <span class="w-2 h-2 rounded-full bg-slate-400 mr-1.5"></span> 孤立沒有lldp資訊: <b id="cntIsolated" class="ml-1">0</b>
+            </span>
+            <span class="status-badge bg-amber-50 text-amber-700 border border-amber-300" title="ICMP Ping 在線，但 SNMP 回應超時或 Community 不符">
+                <span class="w-2 h-2 rounded-full bg-amber-500 mr-1.5"></span> Ping在線(SNMP部分障礙): <b id="cntSnmpDegraded" class="ml-1">0</b>
+            </span>
+            <span class="status-badge bg-rose-50 text-rose-700 border border-rose-300" title="ICMP Ping 中斷，實體線路中斷或斷電">
+                <span class="w-2 h-2 rounded-full bg-rose-500 mr-1.5"></span> 離線: <b id="cntOffline" class="ml-1">0</b>
+            </span>
+            <span class="status-badge bg-purple-50 text-purple-700 border border-purple-300" title="switches.yaml 中未啟用 SNMP，僅先進行 ICMP Ping 探測">
+                <span class="w-2 h-2 rounded-full bg-purple-500 mr-1.5"></span> enable:false數量: <b id="cntDisabled" class="ml-1">0</b>
+            </span>
+            <span class="text-slate-400 text-xs ml-1 font-mono">(總數: <span id="cntTotal" class="font-bold text-slate-600">0</span>)</span>
+        </div>
+
+        <!-- 警示統計與定位提示 -->
+        <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2 px-2.5 py-1 bg-slate-50 border rounded text-xs text-slate-600">
+                <span class="font-bold">連線頻寬線條:</span>
+                <span class="inline-flex items-center gap-1 font-semibold text-emerald-600">
+                    <span class="inline-block w-4 h-1.5 bg-emerald-500 rounded-sm"></span> &ge;10 Gbps (粗綠)
+                </span>
+                <span class="inline-flex items-center gap-1 font-semibold text-amber-600 ml-2">
+                    <span class="inline-block w-4 h-1 bg-amber-500 rounded-sm"></span> 1G~10G (橘線)
+                </span>
+                <span class="inline-flex items-center gap-1 font-semibold text-rose-600 ml-2">
+                    <span class="inline-block w-4 h-0.5 bg-rose-500 rounded-sm"></span> &lt;1 Gbps (紅線)
+                </span>
+            </div>
+            <div id="locateBanner" class="hidden text-xs bg-blue-50 text-blue-700 px-3 py-1 rounded border border-blue-200 font-medium"></div>
+            <div class="text-xs text-slate-500 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded flex items-center gap-1.5 font-mono">
+                <span>⏱️ 10分鐘自動更新:</span>
+                <span id="countdownTimer" class="font-bold text-blue-600">10:00</span>
+                <span id="lastUpdatedTime" class="text-slate-400 pl-1 border-l">--:--:--</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 主工作區：拓撲畫布與詳情抽屜 -->
+    <main class="flex-1 relative overflow-hidden flex">
+        <!-- Vis.js 拓撲網絡畫布 -->
+        <div id="network-canvas" class="flex-1 border-r border-slate-200"></div>
+
+    <!-- 交換器連線狀態總表 Modal -->
+    <div id="switchStatusModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl p-6 border border-slate-200 max-h-[85vh] flex flex-col">
+            <div class="flex justify-between items-center mb-3 border-b pb-3 shrink-0">
+                <div class="flex items-center gap-2">
+                    <span class="text-xl">📋</span>
+                    <h3 class="text-base font-bold text-slate-800">交換器連結狀況 (Ping / SNMP) 完整確認清單</h3>
+                    <span class="text-xs bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-semibold ml-2">10分鐘定時更新</span>
+                </div>
+                <button onclick="closeSwitchStatusModal()" class="text-slate-400 hover:text-slate-600 font-bold text-xl">&times;</button>
+            </div>
+
+            <div class="flex justify-between items-center mb-3 shrink-0">
+                <div class="text-xs text-slate-500">
+                    點擊列表任一列可立即關閉並在畫布上居中聚焦該交換器。
+                </div>
+                <input type="text" id="swModalSearch" onkeyup="filterSwitchTable()" placeholder="🔍 快速篩選名稱、IP 或廠牌..." class="text-xs border rounded px-3 py-1.5 w-64 focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+            </div>
+
+            <div class="overflow-y-auto flex-1 border border-slate-200 rounded-lg">
+                <table class="w-full text-left text-xs" id="swStatusTable">
+                    <thead class="bg-slate-50 border-b text-slate-600 sticky top-0 shadow-sm">
+                        <tr>
+                            <th class="p-2.5 font-bold">管理 IP</th>
+                            <th class="p-2.5 font-bold">交換器名稱</th>
+                            <th class="p-2.5 font-bold">廠牌 / 型號</th>
+                            <th class="p-2.5 font-bold text-center">Ping 探測</th>
+                            <th class="p-2.5 font-bold text-center">SNMP 狀態</th>
+                            <th class="p-2.5 font-bold text-center">終端 FDB</th>
+                            <th class="p-2.5 font-bold text-center">鄰居鏈路</th>
+                            <th class="p-2.5 font-bold">最後輪詢時間</th>
+                            <th class="p-2.5 font-bold text-center">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="swStatusTbody" class="divide-y divide-slate-100">
+                        <tr>
+                            <td colspan="9" class="p-4 text-center text-slate-400">正在讀取交換器狀態...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="mt-4 pt-3 border-t flex justify-between items-center text-xs text-slate-500 shrink-0">
+                <div>共 <b id="swModalCount" class="text-slate-800 font-bold">0</b> 台啟用交換器，狀態：<span class="text-emerald-600 font-bold">全網正常在線</span></div>
+                <button type="button" onclick="closeSwitchStatusModal()" class="px-4 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold">關閉</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- switches.yaml 設定管理工具 Modal -->
+    <div id="switchesConfigModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl p-6 border border-slate-200 max-h-[88vh] flex flex-col">
+            <div class="flex justify-between items-center mb-3 border-b pb-3 shrink-0">
+                <div class="flex items-center gap-2">
+                    <span class="text-xl">🛠️</span>
+                    <h3 class="text-base font-bold text-slate-800">交換器配置管理 (config/switches.yaml)</h3>
+                    <span class="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded font-semibold ml-2">支援直接開關 enabled 與自訂 IP/Community</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button type="button" id="btnViewTable" onclick="toggleYamlView('table')" class="px-3 py-1 bg-purple-600 text-white rounded text-xs font-semibold">表格式檢視</button>
+                    <button type="button" id="btnViewYaml" onclick="toggleYamlView('yaml')" class="px-3 py-1 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded text-xs font-semibold">YAML 原始碼</button>
+                    <button onclick="closeSwitchesConfigModal()" class="text-slate-400 hover:text-slate-600 font-bold text-xl ml-2">&times;</button>
+                </div>
+            </div>
+
+            <!-- 表格檢視區 -->
+            <div id="swConfigTableView" class="overflow-y-auto flex-1 border border-slate-200 rounded-lg">
+                <table class="w-full text-left text-xs">
+                    <thead class="bg-slate-50 border-b text-slate-600 sticky top-0 shadow-sm">
+                        <tr>
+                            <th class="p-2.5 text-center font-bold">啟用 SNMP</th>
+                            <th class="p-2.5 font-bold">管理 IP</th>
+                            <th class="p-2.5 font-bold">交換器名稱 (Name)</th>
+                            <th class="p-2.5 font-bold">廠牌 / 型號</th>
+                            <th class="p-2.5 font-bold">Community (唯讀密碼)</th>
+                            <th class="p-2.5 text-center font-bold">目前模式</th>
+                        </tr>
+                    </thead>
+                    <tbody id="switchesConfigTbody" class="divide-y divide-slate-100"></tbody>
+                </table>
+            </div>
+
+            <!-- YAML 原始碼編輯區 -->
+            <div id="swConfigYamlView" class="hidden flex-1 border border-slate-200 rounded-lg overflow-hidden flex flex-col">
+                <textarea id="yamlRawTextarea" class="w-full flex-1 p-3 font-mono text-xs text-slate-800 bg-slate-50 focus:bg-white focus:outline-none resize-none" spellcheck="false"></textarea>
+            </div>
+
+            <div class="pt-4 flex justify-between items-center border-t mt-3 shrink-0">
+                <span class="text-xs text-slate-500">提示：修改完畢後點擊儲存，系統將即刻寫入 config/switches.yaml，並於按下「🔄 立即更新」或下次定時更新時生效。</span>
+                <div class="flex gap-2">
+                    <button type="button" onclick="closeSwitchesConfigModal()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold">取消</button>
+                    <button type="button" onclick="saveSwitchesConfig()" class="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-semibold shadow-sm">💾 儲存並套用</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 核心節點設定 Modal -->
+    <div id="coreNodesModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 border border-slate-200">
+            <div class="flex justify-between items-center mb-4 border-b pb-3">
+                <h3 class="text-base font-bold text-slate-800 flex items-center gap-2">
+                    <span>⚙️</span> 內部核心網路節點設定
+                </h3>
+                <button onclick="closeCoreNodesModal()" class="text-slate-400 hover:text-slate-600 font-bold text-lg">&times;</button>
+            </div>
+            
+            <p class="text-xs text-slate-500 mb-4">
+                設定校園出口防火牆與預設閘道 (Gateway)，拓樸圖將自動於頂部生成並與核心交換機建立骨幹連接關係。
+            </p>
+
+            <form id="coreNodesForm" onsubmit="saveCoreNodes(event)" class="space-y-4 text-xs">
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">🛡️ 出口防火牆 IP (Firewall)</label>
+                    <input type="text" id="cfgFirewallIp" placeholder="例如: 192.69.1.253" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-rose-500 focus:outline-none font-mono">
+                </div>
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">🛡️ 防火牆名稱 / 型號</label>
+                    <input type="text" id="cfgFirewallName" placeholder="例如: 核心防火牆 (FortiGate)" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-rose-500 focus:outline-none">
+                </div>
+                <div class="border-t pt-3">
+                    <label class="block font-bold text-slate-700 mb-1">🌐 預設閘道 IP (Gateway / Core Router)</label>
+                    <input type="text" id="cfgGatewayIp" placeholder="例如: 192.69.1.254" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono">
+                </div>
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">🌐 閘道名稱</label>
+                    <input type="text" id="cfgGatewayName" placeholder="例如: 校園核心閘道 (Gateway)" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+                </div>
+                <div class="border-t pt-3">
+                    <label class="block font-bold text-slate-700 mb-1">🏢 核心對接交換器 IP (Core Switch)</label>
+                    <input type="text" id="cfgCoreSwitchIp" placeholder="例如: 192.69.1.117 (留空則自動匹配)" class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono">
+                </div>
+
+                <div class="pt-4 flex justify-end gap-2 border-t">
+                    <button type="button" onclick="closeCoreNodesModal()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold">取消</button>
+                    <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-sm">儲存並重繪拓樸</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 側邊詳情抽屜 (Side Drawer) -->
+        <aside id="sideDrawer" class="w-80 bg-white shadow-lg border-l border-slate-200 p-5 overflow-y-auto hidden flex flex-col justify-between">
+            <div>
+                <div class="flex justify-between items-start mb-4 border-b pb-3">
+                    <div>
+                        <h2 id="drawerTitle" class="text-base font-bold text-slate-900">交換機詳情</h2>
+                        <span id="drawerBadge" class="status-badge mt-1">狀態</span>
+                    </div>
+                    <button onclick="closeDrawer()" class="text-slate-400 hover:text-slate-600 font-bold text-lg">&times;</button>
+                </div>
+
+                <div class="space-y-3 text-xs">
+                    <div><span class="font-bold text-slate-500">管理 IP:</span> <span id="drawerIp" class="font-mono text-slate-800">-</span></div>
+                    <div><span class="font-bold text-slate-500">設備廠牌:</span> <span id="drawerVendor" class="text-slate-800 font-semibold">-</span></div>
+                    <div><span class="font-bold text-slate-500">型號:</span> <span id="drawerModel" class="text-slate-800">-</span></div>
+                    <div><span class="font-bold text-slate-500">在線學習 MAC 數:</span> <span id="drawerFdb" class="font-bold text-blue-600">-</span></div>
+                    <div><span class="font-bold text-slate-500">未解決告警:</span> <span id="drawerAlert" class="font-bold text-rose-600">-</span></div>
+                </div>
+
+                <div class="mt-5 border-t pt-3">
+                    <h3 class="text-xs font-bold text-slate-700 mb-2">排障與狀態說明</h3>
+                    <p id="drawerDesc" class="text-xs text-slate-600 bg-slate-50 p-2.5 rounded border border-slate-200 leading-relaxed"></p>
+                </div>
+            </div>
+
+            <div class="mt-4 pt-3 border-t flex flex-col gap-2">
+                <button onclick="focusSwitch()" class="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 py-1.5 rounded text-xs font-semibold">
+                    🎯 居中聚焦此節點
+                </button>
+            </div>
+        </aside>
+    </main>
+
+    <script>
+        let network = null;
+        let isLocked = true; // 預設鎖定，畫面絕對不晃動跳動
+        let selectedNodeId = null;
+        let networkData = null;
+        let rootNodeId = "__GATEWAY__";
+        const STORAGE_KEY = 'school_topology_node_positions_v1';
+
+        function getSavedPositions() {
+            try {
+                const s = localStorage.getItem(STORAGE_KEY);
+                return s ? JSON.parse(s) : null;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function savePositions() {
+            if (!network) return;
+            const positions = network.getPositions();
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(positions));
+            } catch (e) {
+                console.warn('Failed to save positions:', e);
+            }
+        }
+
+        function toggleLockLayout() {
+            isLocked = !isLocked;
+            const lockBtn = document.getElementById('lockBtn');
+            const resetBtn = document.getElementById('resetLayoutBtn');
+
+            if (isLocked) {
+                lockBtn.className = 'bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-300 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition shadow-sm';
+                lockBtn.innerHTML = '🔒 佈局已鎖定 (點擊解鎖排列)';
+                resetBtn.classList.add('hidden');
+                // 鎖定所有節點
+                if (networkData && networkData.nodes) {
+                    networkData.nodes.forEach(node => {
+                        networkData.nodes.update({ id: node.id, fixed: { x: true, y: true } });
+                    });
+                }
+                savePositions();
+            } else {
+                lockBtn.className = 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition shadow-sm animate-pulse';
+                lockBtn.innerHTML = '🔓 自由拖曳排列中 (點擊儲存並鎖定)';
+                resetBtn.classList.remove('hidden');
+                // 解鎖除了 Root 以外的節點
+                if (networkData && networkData.nodes) {
+                    networkData.nodes.forEach(node => {
+                        if (node.is_root || node.id === rootNodeId) {
+                            networkData.nodes.update({ id: node.id, fixed: { x: true, y: true } });
+                        } else {
+                            networkData.nodes.update({ id: node.id, fixed: { x: false, y: false } });
+                        }
+                    });
+                }
+            }
+        }
+
+        function resetCustomPositions() {
+            try {
+                localStorage.removeItem(STORAGE_KEY);
+                alert('已清除自訂位置，即刻還原為預設 Gateway Root 水平排列！');
+                isLocked = true;
+                const lockBtn = document.getElementById('lockBtn');
+                const resetBtn = document.getElementById('resetLayoutBtn');
+                lockBtn.className = 'bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-300 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition shadow-sm';
+                lockBtn.innerHTML = '🔒 佈局已鎖定 (點擊解鎖排列)';
+                resetBtn.classList.add('hidden');
+                initTopology();
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function initTopology() {
+            try {
+                // 1. Fetch Topology Graph
+                const resp = await fetch('/api/v2/topology/graph');
+                const result = await resp.json();
+                if (result.status !== 'success') return;
+
+                if (result.data.root_id) {
+                    rootNodeId = result.data.root_id;
+                }
+
+                const savedPos = getSavedPositions();
+                const container = document.getElementById('network-canvas');
+
+                // Apply saved coordinates or prepare node layout
+                const processedNodes = result.data.nodes.map(n => {
+                    const isRoot = n.is_root || n.id === rootNodeId;
+                    const nodeCopy = { ...n };
+
+                    if (savedPos && savedPos[n.id]) {
+                        nodeCopy.x = savedPos[n.id].x;
+                        nodeCopy.y = savedPos[n.id].y;
+                    }
+
+                    // 預設鎖定模式：全部固定，徹底防跳動
+                    if (isLocked) {
+                        nodeCopy.fixed = { x: true, y: true };
+                    } else {
+                        nodeCopy.fixed = isRoot ? { x: true, y: true } : { x: false, y: false };
+                    }
+                    return nodeCopy;
+                });
+
+                networkData = {
+                    nodes: new vis.DataSet(processedNodes),
+                    edges: new vis.DataSet(result.data.edges)
+                };
+
+                const options = {
+                    nodes: {
+                        borderWidth: 2,
+                        shadow: true,
+                    },
+                    edges: {
+                        arrows: { to: { enabled: false } },
+                        font: { size: 10, align: 'middle', background: '#FFFFFF' },
+                        smooth: { type: 'continuous' }
+                    },
+                    // 關鍵防跳動策略：徹底關閉持續性力導向，計算完畢後立即靜止
+                    physics: {
+                        enabled: false
+                    },
+                    interaction: {
+                        hover: true,
+                        tooltipDelay: 100,
+                        dragNodes: !isLocked,
+                        dragView: true,
+                        zoomView: true
+                    }
+                };
+
+                // 若尚未有自訂座標，使用 Vis.js 階層樹狀水平分佈 (Root: Gateway 置頂)
+                if (!savedPos) {
+                    options.layout = {
+                        hierarchical: {
+                            enabled: true,
+                            direction: 'UD', // 上至下
+                            sortMethod: 'directed',
+                            levelSeparation: 160,
+                            nodeSpacing: 220,
+                            treeSpacing: 200,
+                            blockShifting: true,
+                            edgeMinimization: true,
+                            parentCentralization: true
+                        }
+                    };
+                }
+
+                network = new vis.Network(container, networkData, options);
+
+                // 階層佈局渲染一次後，立即鎖定座標並停止任何動態跳動
+                if (!savedPos) {
+                    network.once('stabilizationIterationsDone', function() {
+                        network.setOptions({ layout: { hierarchical: { enabled: false } }, physics: { enabled: false } });
+                    });
+                }
+
+                // 拖曳結束自動記憶座標
+                network.on('dragEnd', function(params) {
+                    if (!isLocked && params.nodes && params.nodes.length > 0) {
+                        savePositions();
+                    }
+                });
+
+                network.on('click', function(params) {
+                    if (params.nodes.length > 0) {
+                        const nodeId = params.nodes[0];
+                        const node = networkData.nodes.get(nodeId);
+                        showDrawer(node);
+                    } else {
+                        closeDrawer();
+                    }
+                });
+
+                // 2. Fetch Diagnostics Summary
+                fetchDiagnostics();
+            } catch (err) {
+                console.error('Failed to load topology:', err);
+            }
+        }
+
+        async function fetchDiagnostics() {
+            try {
+                const resp = await fetch('/api/v2/diagnostics/summary');
+                const res = await resp.json();
+                if (res.status === 'success') {
+                    const c = res.data.switch_counts || {};
+                    const normalEl = document.getElementById('cntNormal');
+                    const isolatedEl = document.getElementById('cntIsolated');
+                    const degradedEl = document.getElementById('cntSnmpDegraded');
+                    const offlineEl = document.getElementById('cntOffline');
+                    const disabledEl = document.getElementById('cntDisabled');
+                    const totalEl = document.getElementById('cntTotal');
+
+                    if (normalEl) normalEl.innerText = c.normal || 0;
+                    if (isolatedEl) isolatedEl.innerText = c.isolated || 0;
+                    if (degradedEl) degradedEl.innerText = c.snmp_degraded || 0;
+                    if (offlineEl) offlineEl.innerText = c.offline || 0;
+                    if (disabledEl) disabledEl.innerText = c.disabled || 0;
+                    if (totalEl) totalEl.innerText = c.total || 0;
+                }
+            } catch (e) {
+                console.warn(e);
+            }
+        }
+
+        function showDrawer(node) {
+            selectedNodeId = node.id;
+            const drawer = document.getElementById('sideDrawer');
+            document.getElementById('drawerTitle').innerText = node.label.split('\n')[0];
+            document.getElementById('drawerIp').innerText = node.management_ip;
+            document.getElementById('drawerVendor').innerText = node.vendor;
+            document.getElementById('drawerFdb').innerText = node.fdb_count + ' 台';
+            document.getElementById('drawerAlert').innerText = node.alert_count + ' 則';
+
+            const badge = document.getElementById('drawerBadge');
+            const desc = document.getElementById('drawerDesc');
+
+            if (node.poll_status === 'ONLINE_SNMP_OK') {
+                badge.className = 'status-badge bg-emerald-50 text-emerald-700 border border-emerald-300';
+                badge.innerText = '🟢 SNMP 正常在線';
+                desc.innerText = '交換器網路 Ping 正常，SNMP 採集完全成功，鄰居與 MAC 轉發表皆已完整落盤。';
+            } else if (node.poll_status === 'COMMUNITY_MISCONFIGURED') {
+                badge.className = 'status-badge bg-amber-50 text-amber-700 border border-amber-300';
+                badge.innerText = '🟡 Ping 在線 (SNMP 未設定)';
+                desc.innerText = '⚠️ 此設備實體連線與 Ping 探測正常，但 SNMP 查詢超時或 Community 不符。請至該交換機設定 SNMP Community (如 SnmpPublic@TPC)。';
+            } else if (node.poll_status === 'HOST_OFFLINE') {
+                badge.className = 'status-badge bg-rose-50 text-rose-700 border border-rose-300';
+                badge.innerText = '🔴 實體斷線 / 斷電';
+                desc.innerText = '🚨 ICMP Ping 訊號完全中斷，交換器可能處於斷電、光纖或跨棟骨幹斷線狀態。';
+            } else {
+                badge.className = 'status-badge bg-slate-50 text-slate-700 border border-slate-300';
+                badge.innerText = '⚪ 未知 / 待探測';
+                desc.innerText = '尚未進行輪詢或處於待命狀態。';
+            }
+
+            drawer.classList.remove('hidden');
+        }
+
+        function closeDrawer() {
+            document.getElementById('sideDrawer').classList.add('hidden');
+            selectedNodeId = null;
+        }
+
+        function focusSwitch() {
+            if (network && selectedNodeId) {
+                network.focus(selectedNodeId, { scale: 1.2, animation: { duration: 800, easingFunction: 'easeInOutQuad' } });
+            }
+        }
+
+        function toggleLayout() {
+            isHierarchical = !isHierarchical;
+            document.getElementById('layoutBtn').innerText = isHierarchical ? '🕸️ 切換自由力導向' : '🌲 切換階層樹狀';
+            initTopology();
+        }
+
+        // ==================== switches.yaml 管理工具 ====================
+        let switchesConfigData = [];
+
+        async function openSwitchesConfigModal() {
+            document.getElementById('switchesConfigModal').classList.remove('hidden');
+            loadSwitchesConfig();
+        }
+
+        function closeSwitchesConfigModal() {
+            document.getElementById('switchesConfigModal').classList.add('hidden');
+        }
+
+        async function loadSwitchesConfig() {
+            try {
+                const resp = await fetch('/api/v2/config/switches');
+                const res = await resp.json();
+                if (res.status === 'success') {
+                    switchesConfigData = res.data.switches || [];
+                    document.getElementById('yamlRawTextarea').value = res.data.raw_yaml || '';
+                    renderSwitchesConfigTable();
+                }
+            } catch (err) {
+                alert('載入 switches.yaml 失敗: ' + err.message);
+            }
+        }
+
+        function renderSwitchesConfigTable() {
+            const tbody = document.getElementById('switchesConfigTbody');
+            if (!tbody) return;
+            tbody.innerHTML = switchesConfigData.map((s, idx) => {
+                const isEn = s.enabled !== false;
+                return `
+                    <tr class="hover:bg-slate-50 border-b">
+                        <td class="p-2 text-center">
+                            <input type="checkbox" onchange="toggleSwitchConfigEnabled(${idx}, this.checked)" ${isEn ? 'checked' : ''} class="w-4 h-4 text-purple-600 rounded focus:ring-purple-500">
+                        </td>
+                        <td class="p-2 font-mono font-bold text-slate-800">${s.management_ip || '-'}</td>
+                        <td class="p-2"><input type="text" value="${s.name || ''}" onchange="updateSwitchConfigField(${idx}, 'name', this.value)" class="w-full text-xs border rounded px-1.5 py-1"></td>
+                        <td class="p-2 text-slate-600">${s.vendor || '-'} ${s.model ? '(' + s.model + ')' : ''}</td>
+                        <td class="p-2"><input type="text" value="${s.community || ''}" onchange="updateSwitchConfigField(${idx}, 'community', this.value)" class="w-full text-xs border rounded px-1.5 py-1 font-mono"></td>
+                        <td class="p-2 text-center">
+                            <span class="text-xs px-2 py-0.5 rounded font-bold ${isEn ? 'bg-emerald-100 text-emerald-800' : 'bg-purple-100 text-purple-800'}">
+                                ${isEn ? '啟用 SNMP' : '停用 (僅Ping)'}
+                            </span>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function toggleSwitchConfigEnabled(idx, val) {
+            if (switchesConfigData[idx]) {
+                switchesConfigData[idx].enabled = val;
+                renderSwitchesConfigTable();
+            }
+        }
+
+        function updateSwitchConfigField(idx, field, val) {
+            if (switchesConfigData[idx]) {
+                switchesConfigData[idx][field] = val;
+            }
+        }
+
+        function toggleYamlView(mode) {
+            const tableDiv = document.getElementById('swConfigTableView');
+            const yamlDiv = document.getElementById('swConfigYamlView');
+            const btnTable = document.getElementById('btnViewTable');
+            const btnYaml = document.getElementById('btnViewYaml');
+            if (mode === 'yaml') {
+                tableDiv.classList.add('hidden');
+                yamlDiv.classList.remove('hidden');
+                btnYaml.className = 'px-3 py-1 bg-purple-600 text-white rounded text-xs font-semibold';
+                btnTable.className = 'px-3 py-1 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded text-xs font-semibold';
+            } else {
+                yamlDiv.classList.add('hidden');
+                tableDiv.classList.remove('hidden');
+                btnTable.className = 'px-3 py-1 bg-purple-600 text-white rounded text-xs font-semibold';
+                btnYaml.className = 'px-3 py-1 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded text-xs font-semibold';
+            }
+        }
+
+        async function saveSwitchesConfig() {
+            const yamlDiv = document.getElementById('swConfigYamlView');
+            const isYamlMode = !yamlDiv.classList.contains('hidden');
+            let payload = {};
+            if (isYamlMode) {
+                payload = { yaml_content: document.getElementById('yamlRawTextarea').value };
+            } else {
+                payload = { switches: switchesConfigData };
+            }
+
+            try {
+                const resp = await fetch('/api/v2/config/switches', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const res = await resp.json();
+                if (res.status === 'success') {
+                    alert('✅ switches.yaml 設定已成功儲存！系統正在重新整理拓撲與狀態清單...');
+                    closeSwitchesConfigModal();
+                    refreshData(true);
+                } else {
+                    alert('儲存失敗: ' + (res.detail || res.message));
+                }
+            } catch (err) {
+                alert('網路錯誤: ' + err.message);
+            }
+        }
+
+        async function openCoreNodesModal() {
+            try {
+                const resp = await fetch('/api/v2/topology/core-nodes');
+                const res = await resp.json();
+                if (res.status === 'success') {
+                    const d = res.data;
+                    document.getElementById('cfgGatewayIp').value = d.gateway_ip || '';
+                    document.getElementById('cfgGatewayName').value = d.gateway_name || '';
+                    document.getElementById('cfgFirewallIp').value = d.firewall_ip || '';
+                    document.getElementById('cfgFirewallName').value = d.firewall_name || '';
+                    document.getElementById('cfgCoreSwitchIp').value = d.core_switch_ip || '';
+                }
+            } catch (e) {
+                console.error('Failed to load core nodes config:', e);
+            }
+            document.getElementById('coreNodesModal').classList.remove('hidden');
+        }
+
+        function closeCoreNodesModal() {
+            document.getElementById('coreNodesModal').classList.add('hidden');
+        }
+
+        async function saveCoreNodes(e) {
+            e.preventDefault();
+            const payload = {
+                gateway_ip: document.getElementById('cfgGatewayIp').value.trim(),
+                gateway_name: document.getElementById('cfgGatewayName').value.trim(),
+                firewall_ip: document.getElementById('cfgFirewallIp').value.trim(),
+                firewall_name: document.getElementById('cfgFirewallName').value.trim(),
+                core_switch_ip: document.getElementById('cfgCoreSwitchIp').value.trim(),
+            };
+            try {
+                const resp = await fetch('/api/v2/topology/core-nodes', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const res = await resp.json();
+                if (res.status === 'success') {
+                    closeCoreNodesModal();
+                    initTopology();
+                } else {
+                    alert('儲存失敗: ' + (res.detail || res.message));
+                }
+            } catch (err) {
+                alert('網路錯誤: ' + err.message);
+            }
+        }
+
+        async function locateTarget() {
+            const query = document.getElementById('targetSearch').value.trim();
+            if (!query) return;
+
+            const banner = document.getElementById('locateBanner');
+            try {
+                const resp = await fetch(`/api/v2/topology/locate?q=${encodeURIComponent(query)}`);
+                const res = await resp.json();
+                if (res.status === 'success' && res.found) {
+                    const data = res.data;
+                    const swId = data.switch_id;
+                    const port = data.if_index || data.bridge_port || '?';
+                    const devName = data.device_name || data.hostname || data.mac_address;
+
+                    banner.innerHTML = `🎯 <b>定位成功:</b> [${devName}] 連接於 <b>${data.switch_name || swId}</b> (${data.switch_ip}) 實體連接埠 <b>${port}</b>`;
+                    banner.classList.remove('hidden');
+
+                    if (network) {
+                        network.focus(swId, { scale: 1.3, animation: { duration: 1000, easingFunction: 'easeInOutQuad' } });
+                        network.selectNodes([swId]);
+                    }
+                } else {
+                    banner.innerHTML = `⚠️ <b>查無定位:</b> ${res.message || '未在交換機 FDB 找到目標'}`;
+                    banner.classList.remove('hidden');
+                }
+            } catch (err) {
+                banner.innerHTML = `⚠️ 定位發生錯誤: ${err.message}`;
+                banner.classList.remove('hidden');
+            }
+        }
+
+        // 10 分鐘 (600 秒) 自動輪詢定時器
+        const REFRESH_INTERVAL_SECONDS = 600;
+        let countdownSeconds = REFRESH_INTERVAL_SECONDS;
+        let switchesCache = [];
+
+        function updateCountdownDisplay() {
+            const minutes = Math.floor(countdownSeconds / 60);
+            const seconds = countdownSeconds % 60;
+            const text = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+            const timerEl = document.getElementById('countdownTimer');
+            if (timerEl) timerEl.innerText = text;
+        }
+
+        setInterval(() => {
+            if (countdownSeconds > 0) {
+                countdownSeconds--;
+                updateCountdownDisplay();
+            } else {
+                refreshData(false);
+            }
+        }, 1000);
+
+        function refreshData(resetCountdown = true) {
+            if (resetCountdown) {
+                countdownSeconds = REFRESH_INTERVAL_SECONDS;
+                updateCountdownDisplay();
+            }
+            const now = new Date();
+            const timeStr = now.toTimeString().split(' ')[0];
+            const lastUpdatedEl = document.getElementById('lastUpdatedTime');
+            if (lastUpdatedEl) lastUpdatedEl.innerText = timeStr;
+            initTopology();
+            loadSwitchStatusData();
+        }
+
+        async function loadSwitchStatusData() {
+            try {
+                const resp = await fetch('/api/v2/topology/switches');
+                const res = await resp.json();
+                if (res.status === 'success') {
+                    switchesCache = res.data || [];
+                    renderSwitchTable(switchesCache);
+                }
+            } catch (err) {
+                console.error('Failed to load switch statuses:', err);
+            }
+        }
+
+        function renderSwitchTable(list) {
+            const tbody = document.getElementById('swStatusTbody');
+            const countEl = document.getElementById('swModalCount');
+            if (countEl) countEl.innerText = list.length;
+            if (!tbody) return;
+
+            if (list.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="9" class="p-4 text-center text-slate-400">目前尚無已註冊交換器數據</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = list.map(sw => {
+                const ip = sw.management_ip || sw.switch_id;
+                const isEnabled = sw.is_enabled !== false;
+                const isOnline = sw.poll_status === 'ONLINE_SNMP_OK';
+                const isMisconfig = sw.poll_status === 'COMMUNITY_MISCONFIGURED';
+                const isOffline = sw.poll_status === 'HOST_OFFLINE';
+                const isUnconfigured = sw.poll_status === 'SNMP_UNCONFIGURED' || !isEnabled;
+
+                let pingBadge = '<span class="status-badge bg-emerald-50 text-emerald-700 border border-emerald-300">🟢 在線</span>';
+                if (isOffline) {
+                    pingBadge = '<span class="status-badge bg-rose-50 text-rose-700 border border-rose-300">🔴 離線</span>';
+                }
+
+                let snmpBadge = '<span class="status-badge bg-emerald-100 text-emerald-800 font-bold">ONLINE_OK</span>';
+                if (isUnconfigured) {
+                    snmpBadge = '<span class="status-badge bg-purple-50 text-purple-700 border border-purple-300 font-bold">未設定 (enabled:false)</span>';
+                } else if (isMisconfig) {
+                    snmpBadge = '<span class="status-badge bg-amber-100 text-amber-800 font-bold">SNMP 障礙</span>';
+                } else if (isOffline) {
+                    snmpBadge = '<span class="status-badge bg-rose-100 text-rose-800 font-bold">HOST_OFFLINE</span>';
+                }
+
+                const lastPoll = sw.last_poll_time ? sw.last_poll_time.replace('T', ' ').replace('Z', '') : '-';
+
+                return `
+                    <tr class="hover:bg-slate-50 transition cursor-pointer" onclick="focusSwitchFromModal('${sw.switch_id}', ${isEnabled})">
+                        <td class="p-2.5 font-mono font-bold text-slate-800">${ip}</td>
+                        <td class="p-2.5 font-semibold text-slate-700">${sw.sys_name || '-'}</td>
+                        <td class="p-2.5 text-slate-600">${sw.vendor || 'Generic'} ${sw.model ? '<span class=\"text-xs text-slate-400 font-mono\">(' + sw.model + ')</span>' : ''}</td>
+                        <td class="p-2.5 text-center">${pingBadge}</td>
+                        <td class="p-2.5 text-center">${snmpBadge}</td>
+                        <td class="p-2.5 text-center font-bold text-blue-600 font-mono">${sw.fdb_count !== undefined ? sw.fdb_count : '-'}</td>
+                        <td class="p-2.5 text-center font-bold text-indigo-600 font-mono">${sw.neighbor_count !== undefined ? sw.neighbor_count : '-'}</td>
+                        <td class="p-2.5 font-mono text-xs text-slate-500">${lastPoll}</td>
+                        <td class="p-2.5 text-center">
+                            <button onclick="event.stopPropagation(); focusSwitchFromModal('${sw.switch_id}', ${isEnabled})" class="px-2 py-1 bg-slate-100 hover:bg-blue-600 hover:text-white rounded text-xs transition">
+                                ${isEnabled ? '🎯 聚焦' : 'ℹ️ 未納管'}
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function filterSwitchTable() {
+            const q = document.getElementById('swModalSearch').value.trim().toLowerCase();
+            if (!q) {
+                renderSwitchTable(switchesCache);
+                return;
+            }
+            const filtered = switchesCache.filter(s => {
+                const name = (s.sys_name || '').toLowerCase();
+                const ip = (s.management_ip || s.switch_id || '').toLowerCase();
+                const vendor = (s.vendor || '').toLowerCase();
+                const model = (s.model || '').toLowerCase();
+                return name.includes(q) || ip.includes(q) || vendor.includes(q) || model.includes(q);
+            });
+            renderSwitchTable(filtered);
+        }
+
+        function openSwitchStatusModal() {
+            loadSwitchStatusData();
+            document.getElementById('switchStatusModal').classList.remove('hidden');
+        }
+
+        function closeSwitchStatusModal() {
+            document.getElementById('switchStatusModal').classList.add('hidden');
+        }
+
+        function focusSwitchFromModal(swId, isEnabled = true) {
+            closeSwitchStatusModal();
+            if (!isEnabled) {
+                alert(`設備 [${swId}] 於 switches.yaml 中設定為 enabled: false (尚未納管 SNMP)，因此未繪製於拓撲連線圖中。如欲納管請點擊「🛠️ 交換器設定管理」啟用！`);
+                return;
+            }
+            if (network && swId) {
+                network.focus(swId, { scale: 1.3, animation: { duration: 1000, easingFunction: 'easeInOutQuad' } });
+                network.selectNodes([swId]);
+                // Trigger drawer
+                const node = network.body.data.nodes.get(swId);
+                if (node) showDrawer(node);
+            }
+        }
+
+        function refreshData() {
+            initTopology();
+        }
+
+        window.onload = () => {
+            refreshData(true);
+        };
+    </script>
+</body>
+</html>

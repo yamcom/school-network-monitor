@@ -6,6 +6,7 @@ import asyncio
 import logging
 import sys
 import warnings
+from typing import Any, List, Optional, Tuple
 
 # 1. 消除明文社群字串的安全性警告 (PySnmpWeakCryptoWarning)
 warnings.filterwarnings("ignore", category=UserWarning, module="pysnmp")
@@ -121,71 +122,95 @@ class SNMPClient:
             (self.ip, self.port), timeout=self.timeout, retries=self.retries
         )
 
+    def _cleanup_engine(self, engine: Any) -> None:
+        """強制釋放 SnmpEngine 底層的 UDP Socket 與 TransportDispatcher，避免 Windows FD_SETSIZE 爆滿。"""
+        if not engine:
+            return
+        try:
+            dispatcher = getattr(engine, "transport_dispatcher", None) or getattr(engine, "transportDispatcher", None)
+            if dispatcher:
+                if hasattr(dispatcher, "close_dispatcher"):
+                    dispatcher.close_dispatcher()
+                elif hasattr(dispatcher, "closeDispatcher"):
+                    dispatcher.closeDispatcher()
+        except Exception:
+            pass
+
     async def get(self, oid: str, engine: Optional[hlapi.SnmpEngine] = None) -> Optional[str]:
+        is_custom_engine = engine is not None
         snmp_engine = engine or hlapi.SnmpEngine()
         auth = self._get_auth_data()
-        target = await self._get_target()
 
-        errorIndication, errorStatus, errorIndex, varBinds = await getCmdFunc(
-            snmp_engine,
-            auth,
-            target,
-            hlapi.ContextData(),
-            hlapi.ObjectType(hlapi.ObjectIdentity(oid)),
-        )
+        try:
+            target = await self._get_target()
+            errorIndication, errorStatus, errorIndex, varBinds = await getCmdFunc(
+                snmp_engine,
+                auth,
+                target,
+                hlapi.ContextData(),
+                hlapi.ObjectType(hlapi.ObjectIdentity(oid)),
+            )
 
-        if errorIndication:
-            logger.warning(f"SNMP GET {self.ip}:{oid} ErrorIndication: {errorIndication}")
+            if errorIndication:
+                logger.warning(f"SNMP GET {self.ip}:{oid} ErrorIndication: {errorIndication}")
+                return None
+            if errorStatus:
+                logger.warning(f"SNMP GET {self.ip}:{oid} ErrorStatus: {errorStatus.prettyPrint()}")
+                return None
+
+            for varBind in varBinds:
+                return str(varBind[1])
             return None
-        if errorStatus:
-            logger.warning(f"SNMP GET {self.ip}:{oid} ErrorStatus: {errorStatus.prettyPrint()}")
-            return None
-
-        for varBind in varBinds:
-            return str(varBind[1])
-        return None
+        finally:
+            if not is_custom_engine:
+                self._cleanup_engine(snmp_engine)
 
     async def walk(self, root_oid: str, engine: Optional[hlapi.SnmpEngine] = None) -> List[Tuple[str, Any]]:
+        is_custom_engine = engine is not None
         snmp_engine = engine or hlapi.SnmpEngine()
         auth = self._get_auth_data()
-        target = await self._get_target()
         results: List[Tuple[str, Any]] = []
 
         norm_root = root_oid.strip(".")
         last_oid = None
 
-        async for errorIndication, errorStatus, errorIndex, varBinds in walkCmdFunc(
-            snmp_engine,
-            auth,
-            target,
-            hlapi.ContextData(),
-            hlapi.ObjectType(hlapi.ObjectIdentity(root_oid)),
-            lexicographicMode=False,
-        ):
-            if errorIndication or errorStatus:
-                break
-
-            should_stop = False
-            for varBind in varBinds:
-                curr_oid = str(varBind[0]).strip(".")
-
-                # 防死迴圈保護
-                if curr_oid == last_oid:
-                    should_stop = True
-                    break
-                last_oid = curr_oid
-
-                # 防越界保護 (超出子樹即停止)
-                if not curr_oid.startswith(norm_root):
-                    should_stop = True
+        try:
+            target = await self._get_target()
+            async for errorIndication, errorStatus, errorIndex, varBinds in walkCmdFunc(
+                snmp_engine,
+                auth,
+                target,
+                hlapi.ContextData(),
+                hlapi.ObjectType(hlapi.ObjectIdentity(root_oid)),
+                lexicographicMode=False,
+            ):
+                if errorIndication or errorStatus:
                     break
 
-                results.append((str(varBind[0]), varBind[1]))
+                should_stop = False
+                for varBind in varBinds:
+                    curr_oid = str(varBind[0]).strip(".")
 
-            if should_stop:
-                break
+                    # 防死迴圈保護
+                    if curr_oid == last_oid:
+                        should_stop = True
+                        break
+                    last_oid = curr_oid
 
-        return results
+                    # 防越界保護 (超出子樹即停止)
+                    if not curr_oid.startswith(norm_root):
+                        should_stop = True
+                        break
+
+                    results.append((str(varBind[0]), varBind[1]))
+
+                if should_stop:
+                    break
+
+            return results
+        finally:
+            if not is_custom_engine:
+                self._cleanup_engine(snmp_engine)
 
     def _run_in_loop(self, coro):
         try:

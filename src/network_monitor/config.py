@@ -110,8 +110,9 @@ def load_settings(
 
     # 優先順序：使用者指定路徑 -> config/switches.yaml -> config/switches.example.yaml
     target_sw_path = None
-    if switches_path and Path(switches_path).exists():
-        target_sw_path = Path(switches_path)
+    if switches_path is not None:
+        if str(switches_path).strip() and Path(switches_path).exists():
+            target_sw_path = Path(switches_path)
     elif Path("config/switches.yaml").exists():
         target_sw_path = Path("config/switches.yaml")
     elif Path("config/switches.example.yaml").exists():

@@ -9,10 +9,23 @@ from typing import Generator
 class Database:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
+        self._mem_conn: sqlite3.Connection | None = None
+        if db_path == ":memory:":
+            self._mem_conn = sqlite3.connect(":memory:", check_same_thread=False)
+            self._mem_conn.row_factory = sqlite3.Row
 
     @contextmanager
     def transaction(self) -> Generator[sqlite3.Connection, None, None]:
         """Provide a transactional scope around a series of operations with WAL enabled."""
+        if self._mem_conn:
+            try:
+                yield self._mem_conn
+                self._mem_conn.commit()
+            except Exception:
+                self._mem_conn.rollback()
+                raise
+            return
+
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
@@ -30,6 +43,10 @@ class Database:
     @contextmanager
     def conn(self) -> Generator[sqlite3.Connection, None, None]:
         """Provide a read-friendly connection scope for querying without explicit auto-commit."""
+        if self._mem_conn:
+            yield self._mem_conn
+            return
+
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
@@ -83,6 +100,7 @@ class Database:
             first_seen DATETIME NOT NULL,
             last_seen DATETIME NOT NULL,
             last_dhcp_event DATETIME,
+            last_ack_time DATETIME,
             lease_time INTEGER,
             lease_expiry DATETIME,
             lease_status TEXT DEFAULT 'observed',

@@ -3,7 +3,7 @@ app:
   name: school-network-monitor
   timezone: Asia/Taipei
 capture:
-  enabled: true
+  enabled: false
   filter: udp and (port 67 or port 68)
   interface: \Device\NPF_{73456D91-2551-4F14-AA3E-F8C558D08E01}
 database:
@@ -88,7 +88,7 @@ retention:
   dhcp_events_days: 30
 snmp:
   community: SnmpPublic@TPC
-  poll_interval_seconds: 180
+  poll_interval_seconds: 300
   retries: 1
   timeout_seconds: 3.0
   v3_auth_key: ''

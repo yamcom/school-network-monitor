@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import logging
+import time
 from datetime import datetime
 from typing import List
 from network_monitor.config import SwitchItemConfig
@@ -112,4 +113,5 @@ class SNMPCollector:
         for sw in switches_cfg:
             if self.poll_switch(sw, global_snmp_cfg):
                 success += 1
+                time.sleep(0.1)  # 讓 Windows 底層 Winsock 完整回收已關閉的 Socket
         return success

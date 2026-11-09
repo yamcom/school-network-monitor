@@ -25,14 +25,14 @@ class DHCPMessageType(str, Enum):
     INFORM = "INFORM"
 
 
-def normalize_mac(mac: str) -> str:
+def normalize_mac(mac: str) -> Optional[str]:
     """Normalize MAC address to standard format."""
     if not mac:
-        return ""
+        return None
     clean = "".join(c for c in mac if c.isalnum()).upper()
-    if len(clean) == 12:
+    if len(clean) == 12 and all(c in "0123456789ABCDEF" for c in clean):
         return ":".join(clean[i : i + 2] for i in range(0, 12, 2))
-    return mac.upper()
+    return None
 
 
 @dataclass
@@ -67,13 +67,17 @@ class SwitchInfo:
     last_poll_time: Optional[datetime] = None
     uplink_ports: List[str] = field(default_factory=list)
 
-    def __init__(self, **kwargs: Any) -> None:
-        valid_fields = {
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        valid_fields = [
             "switch_id", "management_ip", "sys_name", "sys_descr",
             "sys_object_id", "vendor", "model", "adapter_name",
             "snmp_version", "community", "poll_status",
             "last_poll_time", "uplink_ports"
-        }
+        ]
+        for i, val in enumerate(args):
+            if i < len(valid_fields):
+                setattr(self, valid_fields[i], val)
+
         for k, v in kwargs.items():
             if k in valid_fields:
                 setattr(self, k, v)
@@ -100,9 +104,9 @@ class SwitchInfo:
 class SwitchInterface:
     switch_id: int
     if_index: int
-    if_name: str
-    if_descr: str
-    if_alias: str
+    if_name: str = ""
+    if_descr: Optional[str] = None
+    if_alias: Optional[str] = None
     bridge_port: Optional[int] = None
     is_uplink: bool = False
 
@@ -116,17 +120,20 @@ class FdbEntry:
     last_seen: Optional[datetime] = None
     if_index: Optional[int] = None
 
-    def __init__(self, **kwargs: Any) -> None:
-        valid_fields = {"switch_id", "mac", "bridge_port", "vlan_id", "last_seen", "if_index"}
-        
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        fields = ["switch_id", "mac", "bridge_port", "vlan_id", "last_seen", "if_index"]
+        for i, val in enumerate(args):
+            if i < len(fields):
+                setattr(self, fields[i], val)
+
         if "mac_address" in kwargs and "mac" not in kwargs:
             kwargs["mac"] = kwargs.pop("mac_address")
-            
+
         for k, v in kwargs.items():
-            if k in valid_fields:
+            if k in fields:
                 setattr(self, k, v)
 
-        for field_name in valid_fields:
+        for field_name in fields:
             if not hasattr(self, field_name):
                 if field_name in ("vlan_id", "last_seen", "if_index"):
                     setattr(self, field_name, None)
@@ -146,6 +153,7 @@ class DeviceCurrent:
     current_ip: Optional[str] = None
     hostname: Optional[str] = None
     last_seen: Optional[datetime] = None
+    last_ack_time: Optional[datetime] = None
 
 
 @dataclass

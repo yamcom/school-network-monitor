@@ -66,7 +66,7 @@ class DHCPParser:
         yiaddr = bootp.yiaddr if (bootp.yiaddr and bootp.yiaddr != "0.0.0.0") else None
         ciaddr = bootp.ciaddr if (bootp.ciaddr and bootp.ciaddr != "0.0.0.0") else None
         requested_ip = dhcp_opts.get("requested_addr") or dhcp_opts.get(50)
-        assigned_ip = yiaddr or requested_ip
+        assigned_ip = yiaddr if msg_type_str in ("OFFER", "ACK") else None
 
         hostname = dhcp_opts.get("hostname") or dhcp_opts.get(12)
         if isinstance(hostname, bytes):

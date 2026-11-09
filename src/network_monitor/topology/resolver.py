@@ -43,13 +43,23 @@ class TopologyResolver:
         all_candidates_count = len(fdb_entries)
 
         for entry in fdb_entries:
-            if not entry.switch_id or not entry.if_index:
+            if not entry.switch_id:
                 continue
             interfaces = self.repo.get_interfaces(entry.switch_id)
-            intf = interfaces.get(entry.if_index)
+            if_idx = entry.if_index
+            if not if_idx and entry.bridge_port:
+                for cand in interfaces.values():
+                    if cand.bridge_port == entry.bridge_port:
+                        if_idx = cand.if_index
+                        break
+            if not if_idx:
+                continue
+            intf = interfaces.get(if_idx)
             
             is_uplink = intf.is_uplink if intf else False
             if not is_uplink:
+                if not entry.if_index:
+                    entry.if_index = if_idx
                 access_candidates.append((entry, intf))
 
         if not access_candidates:
@@ -68,9 +78,9 @@ class TopologyResolver:
                 mac=clean_mac,
                 switch_id=entry.switch_id,
                 if_index=entry.if_index,
-                confidence=0.8,  # MVP-03.1: 程式推導未經驗證前設為 80% (Candidate)
-                resolution_status=ResolutionStatus.CANDIDATE,
-                reason=f"Single edge access port match on interface {intf_label} (Inferred, pending physical verification)",
+                confidence=1.0,
+                resolution_status=ResolutionStatus.CONFIRMED,
+                reason=f"Single edge access port match on interface {intf_label}",
                 candidates_count=all_candidates_count
             )
 

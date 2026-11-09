@@ -7,6 +7,8 @@ import subprocess
 import time
 import yaml
 import click
+import sqlite3
+from pathlib import Path
 from datetime import datetime
 from typing import Any
 
@@ -57,14 +59,51 @@ def auto_detect_active_interface() -> str:
 
 
 @click.group()
-@click.option("--config", default="config/settings.yaml", help="Path to settings.yaml")
-@click.option("--switches", default="config/switches.yaml", help="Path to switches.yaml")
+@click.option("--config", "-c", default="config/settings.yaml", help="Path to settings.yaml")
+@click.option("--switches", "-s", default="config/switches.yaml", help="Path to switches.yaml")
 @click.pass_context
 def cli(ctx: click.Context, config: str, switches: str) -> None:
     """School Network Monitor CLI tool."""
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config
     ctx.obj["switches_path"] = switches
+
+
+@cli.command("check-config")
+@click.pass_context
+def check_config_cmd(ctx: click.Context) -> None:
+    """檢查設定檔與交換器清單格式。"""
+    try:
+        settings = load_settings(ctx.obj["config_path"], ctx.obj["switches_path"])
+        click.echo(f"[OK] Configuration valid. App: {settings.app.name}, Switches: {len(settings.switches)}")
+    except Exception as e:
+        click.echo(f"[FAIL] Configuration error: {e}", err=True)
+        ctx.exit(1)
+
+
+@cli.command("db-backup")
+@click.option("--dir", "-d", default="backups", help="備份檔案存放目錄")
+@click.pass_context
+def db_backup_cmd(ctx: click.Context, dir: str) -> None:
+    """執行 SQLite 線上熱備份 (Online Backup API)。"""
+    settings = load_settings(ctx.obj["config_path"], ctx.obj["switches_path"])
+    backup_path = Path(dir)
+    backup_path.mkdir(parents=True, exist_ok=True)
+    db_file = Path(settings.database.path)
+    if not db_file.exists():
+        db = Database(str(db_file))
+        db.init_schema()
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dest_file = backup_path / f"network_monitor_backup_{timestamp}.db"
+
+    src_conn = sqlite3.connect(str(db_file))
+    dst_conn = sqlite3.connect(str(dest_file))
+    with dst_conn:
+        src_conn.backup(dst_conn)
+    dst_conn.close()
+    src_conn.close()
+    click.echo(f"[OK] Database backup completed: {dest_file}")
 
 
 @cli.command("check-snmp")
@@ -103,10 +142,22 @@ def check_snmp_cmd(ctx: click.Context, switch: str, verbose: bool) -> None:
         try:
             success = collector.poll_switch(sw, settings.snmp)
             if success:
-                click.secho(" [成功]", fg="green", bold=True)
+                click.secho(" [成功 (ONLINE)]", fg="green", bold=True)
                 success_count += 1
             else:
-                click.secho(" [失敗 / 逾時]", fg="red")
+                # 執行 Ping 訊號確認是否在線
+                is_ping_alive = False
+                try:
+                    res = subprocess.run(["ping", "-n", "1", "-w", "800", sw.management_ip], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    if res.returncode == 0 and b"TTL=" in res.stdout.upper():
+                        is_ping_alive = True
+                except Exception:
+                    pass
+
+                if is_ping_alive:
+                    click.secho(" [PING 在線 / SNMP Community 未設定或不符]", fg="yellow", bold=True)
+                else:
+                    click.secho(" [實體離線 / 斷電或斷線]", fg="red")
         except Exception as e:
             click.secho(f" [失敗: {e}]", fg="red")
             if verbose:
@@ -472,7 +523,7 @@ def find_ip_cmd(ctx: click.Context, ip: str, verbose: bool) -> None:
 
 
 @cli.command("export-csv")
-@click.option("--output", default="network_device_report.csv", help="Output CSV file path for devices")
+@click.option("--output", "-o", default="network_device_report.csv", help="Output CSV file path for devices")
 @click.option("--alert-output", default="dhcp_security_alerts.csv", help="Output CSV file path for security alerts")
 @click.pass_context
 def export_csv_cmd(ctx: click.Context, output: str, alert_output: str) -> None:
@@ -886,6 +937,52 @@ def poll_lldp_cmd(ctx: click.Context, switch: str) -> None:
             click.secho(" [無鄰居回報或不支援]", fg="yellow")
 
     click.echo(f"✅ LLDP 採集完畢，累計記錄 {total_found} 筆觀測資料。")
+
+
+@cli.command("poll-neighbors")
+@click.option("--switch", "-s", default="", help="指定交換器 IP (未指定則輪詢全部啟用交換器)")
+@click.option("--protocol", "-p", type=click.Choice(["all", "lldp", "fdp"], case_sensitive=False), default="all", help="指定查詢協定 (all/lldp/fdp)")
+@click.pass_context
+def poll_neighbors_cmd(ctx: click.Context, switch: str, protocol: str) -> None:
+    """透過 SNMP 輪詢交換器之 FDP (Foundry/Brocade/Ruckus) 與 LLDP 鄰居資訊。"""
+    settings = load_settings(ctx.obj["config_path"], ctx.obj["switches_path"])
+    db = Database(settings.database.path)
+    repo = NetworkRepository(db)
+
+    from ..snmp.neighbor_collector import NeighborCollector
+    collector = NeighborCollector(repo)
+
+    switches = [s for s in settings.switches if s.enabled]
+    if switch:
+        switches = [s for s in switches if s.management_ip == switch or s.name == switch]
+
+    proto_label = protocol.upper()
+    click.echo(f"🚀 開始採集 {len(switches)} 台交換器的 [{proto_label}] 鄰居資訊...")
+    total_found = 0
+    for sw in switches:
+        click.echo(f" -> 正在查詢 {sw.name} ({sw.management_ip})...", nl=False)
+        if proto_label == "LLDP":
+            neighbors = collector.poll_lldp_neighbors(sw, settings.snmp)
+        elif proto_label == "FDP":
+            neighbors = collector.poll_fdp_neighbors(sw, settings.snmp)
+        else:
+            neighbors = collector.poll_all_neighbors(sw, settings.snmp)
+
+        if neighbors:
+            target_sw = next((s for s in repo.list_switches() if s.management_ip == sw.management_ip), None)
+            if target_sw and target_sw.switch_id:
+                repo.save_topology_observations(target_sw.switch_id, neighbors)
+            click.secho(f" [成功: 找到 {len(neighbors)} 個鄰居]", fg="green")
+            for n in neighbors:
+                p_name = n.get('remote_device_name') or 'Unknown'
+                p_port = n.get('remote_port_id') or '?'
+                p_proto = n.get('protocol') or '?'
+                click.echo(f"     └─ 埠 {n.get('local_port')}: [{p_proto}] {p_name} ({p_port}) {n.get('remote_mgmt_ip', '')}")
+            total_found += len(neighbors)
+        else:
+            click.secho(" [無鄰居回報或不支援]", fg="yellow")
+
+    click.echo(f"✅ 鄰居採集完畢，累計記錄 {total_found} 筆觀測資料。")
 
 
 @cli.command("discover-topology")

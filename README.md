@@ -1,191 +1,202 @@
-# School Network Monitor (校園有線網路被動監測與資安防護系統)
+# School Network Monitor (校園網路健康診斷與異常監控系統)
 
-本系統為一套專為校園有線網路設計的自動化監控與資安異常檢測原型系統。系統採用**被動式 DHCP 封包擷取**與**唯讀 SNMP 交換器輪詢**雙軌並行架構，無需更動核心防火牆或交換器設定，即可建立完整的「端點裝置 ⇄ 交換器 ⇄ 實體連接埠」對應與資安防護網。
-
----
-
-## 一、 系統基本環境需求
-
-在 Windows 11 監控主機上執行本系統前，請確認已完成以下前置環境安裝：
-
-1. **Python 3.12 (64-bit)**：
-   * 安裝時請務必勾選 **"Add Python to PATH"**（將 Python 加入環境變數）。
-   * 建議確認版本：`python --version`（應顯示 Python 3.12.x）。
-
-2. **Npcap (封包擷取驅動程式)**：
-   * 下載並安裝最新版 [Npcap](https://npcap.com/)。
-   * **安裝關鍵設定**：安裝精靈中務必勾選以下兩項：
-     * ☑ **Support raw 802.11 traffic capture for wireless adapters** (支援無線網路原始流量，選填)
-     * ☑ **Install Npcap in WinPcap API-compatible Mode** (**強烈建議勾選**，確保 Scapy 底層能透過 WinPcap 相容介面順利擷取封包)。
+> **專案名稱**：校園網路健康診斷與異常監控系統 (School Network Health Monitor)  
+> **適用環境**：Windows 11 64-bit / Python 3.10+ 原生環境 / Npcap 1.70+  
+> **權威參考架構**：[`docs/DHCP及SNMP網路健康診斷系統架構書.md`](file:///D:/agy-chengyan/school-network-monitor/docs/DHCP及SNMP網路健康診斷系統架構書.md) (V3.2)  
+> **系統核心目標**：整合 **被動式 DHCP 即時串流監聽** 與 **多廠牌唯讀 SNMP (LLDP / FDP / FDB MAC) 自動化輪詢**，精確建立「設備 IP/MAC ⇄ 交換機 ⇄ 實體連接埠」動態對照表，達成校園網路故障一鍵精確診斷與即時拓樸視覺化。
 
 ---
 
-## 二、 安裝套件步驟
+## 目錄
+1. [系統總體架構與核心設計原則](#一系統總體架構與核心設計原則)
+2. [系統環境需求與安裝步驟](#二系統環境需求與安裝步驟)
+3. [系統日常維運與守護程序啟動 (SOP)](#三系統日常維運與守護程序啟動-sop)
+4. [Windows 工作排程器配置 (每日自動維護)](#四windows-工作排程器配置-每日自動維護)
+5. [Web 儀表板與拓撲視覺化工作站功能](#五web-儀表板與拓撲視覺化工作站功能)
+6. [命令列操作工具清單 (CLI Reference)](#六命令列操作工具清單-cli-reference)
+7. [後續待開發與功能演進藍圖 (Roadmap)](#七後續待開發與功能演進藍圖-roadmap)
 
-系統依賴 `Scapy` 進行封包解析、`pysnmp` 進行設備輪詢、`Pydantic` 進行強型別設定驗證。
+---
 
-### 1. 建立虛擬環境與安裝相依套件
-請開啟命令提示字元 (CMD) 或 PowerShell，進入專案根目錄執行：
+## 一、系統總體架構與核心設計原則
+
+本系統採用「四大獨立解耦運作軌道」與「單一資料庫寫入協調器 (DB Writer)」架構，嚴格遵守以下軟體工程約束：
+
+```text
+  [即時封包軌道]                 [SNMP 輪詢軌道]                 [維運清理軌道]
+   dhcp_monitor                   snmp_poller                    maintenance
+        │                              │                              │
+     (HIGH)                         (NORMAL)                        (LOW)
+        └──────────────┬───────────────┴──────────────┬───────────────┘
+                       ▼                              ▼
+                 ┌─────────────────────────────────────────┐
+                 │       單一 DB Writer (db_writer.py)     │
+                 │   老化機制 (Aging) 杜絕 database is locked │
+                 └────────────────────┬────────────────────┘
+                                      │ (WAL 模式)
+                                      ▼
+                           ┌─────────────────────┐
+                           │ SQLite3 資料庫核心   │
+                           │ network_monitor.db  │
+                           └──────────┬──────────┘
+                                      │ (唯讀連線 query_only=ON)
+                                      ▼
+                        ┌───────────────────────────┐
+                        │ Web 服務 (FastAPI/Uvicorn) │
+                        │ 儀表板 / Vis.js 拓撲工作站 │
+                        └───────────────────────────┘
+```
+
+1. **單一 SQLite 3 資料庫核心 (WAL Mode)**：唯讀查詢與即時寫入完全分流，API 端點使用唯讀連線，杜絕鎖定衝突。
+2. **優先權寫入協調器 (DB Writer)**：即時監控 (HIGH) > 離線分析/SNMP (NORMAL) > 維運清理 (LOW)，保障即時 DHCP 封包零遺漏。
+3. **VLAN Relay-Only 策略**：不依賴實體 Trunk/Dot1Q 標籤，透過 DHCP Relay Agent IP (`giaddr`) 映射 VLAN，並以 `MAC + VLAN` 作為複合主鍵。
+4. **Web 完全解耦**：網頁端僅提供唯讀查詢與配置管理，絕不直接介入底層背景程序的啟動或停止。
+5. **磁碟保護門檻**：內建 5GB (5,120 MB) 預檢防護，剩餘空間不足時主動終止作業保護 SQLite。
+
+---
+
+## 二、系統環境需求與安裝步驟
+
+### 1. 前置軟體環境需求
+* **作業系統**：Windows 11 64-bit。
+* **Python 環境**：官方原生 Python 3.10+ (推薦 3.11 或 3.12 64-bit，請勾選 *Add Python to PATH*)。
+* **封包驅動**：[Npcap 1.70+](https://npcap.com/)。
+  * *安裝時請務必勾選*：☑ **Install Npcap in WinPcap API-compatible Mode**。
+  * *中文網卡支援*：系統內建自動名稱轉換，自動將「`乙太網路 2`」對應至 `\Device\NPF_{GUID}`。
+
+### 2. 標準安裝與初始化步驟 (原生 Python & pip)
+開啟 PowerShell 進入專案根目錄執行：
 
 ```powershell
-# 1. 建立虛擬環境
+# 1. 建立 Python 官方標準虛擬環境
 python -m venv .venv
 
-# 2. 啟動虛擬環境 (Windows PowerShell)
+# 2. 啟動虛擬環境 (PowerShell)
 .\.venv\Scripts\Activate.ps1
 
-# 3. 升級 pip
+# 3. 升級 pip 並安裝系統核心套件
 python -m pip install --upgrade pip
-
-# 4. 安裝專案與開發相依套件
 pip install -r requirements.txt
+
+# 4. 安裝 netmon CLI 工具至虛擬環境
 pip install -e .
 ```
 
-### 2. 專案核心 Python 套件說明 (`requirements.txt` / `pyproject.toml`)
-本專案運行所需的關鍵 Python 套件清單如下：
-* **`scapy>=2.5.0`**：底層網路封包擷取與 DHCP/BOOTP 封包解碼。
-* **`pydantic>=2.0`**：執行 `settings.yaml` 與 `switches.yaml` 的結構與型別驗證。
-* **`pysnmp-lextudio`**：提供 SNMP v2c / v3 唯讀輪詢與 MIB 查詢能力。
-* **`click>=8.0`**：構建強大且結構化的 `netmon`命令列操作介面。
-* **`pyyaml>=6.0`**：讀取與寫入 YAML 格式設定檔。
-* **`pandas` / `openpyxl`**：用於解析校園固定 IP 清單與交換器盤點 Excel 檔案。
-* **`pytest`**：用於執行單元測試與整合驗證。
+---
+
+## 三、系統日常維運與守護程序啟動 (SOP)
+
+系統日常運作依賴三大獨立背景守護行程：
+
+```text
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │                        系統管理員日常營運作業循環                      │
+ └────────────────────────────────────────────────────────────────────────┘
+      │
+      ├─► [1. 啟動監控]  .\run_live_monitor.ps1 (或 python dhcp_monitor.py)
+      │                  └─ 監聽 UDP 67/68 廣播，自動選擇實體網卡，寫入 WAL。
+      │
+      ├─► [2. 啟動 Web]  .\run_web.ps1 (或 python app.py)
+      │                  └─ 瀏覽 http://127.0.0.1:8000。
+      │
+      ├─► [3. 拓樸輪詢]  .\scripts\run_snmp_poll.ps1 (或 netmon poll-neighbors)
+      │                  └─ 定期掃描交換器 Ping/SNMP，更新 FDB MAC 與鄰居關係。
+      │
+      └─► [4. 每日維護]  Windows 排程器每日 03:00 自動執行 run_maintenance.bat
+                         └─ 5GB 剩餘空間安全檢查、WAL Checkpoint、線上熱備份。
+```
+
+### 常用啟動腳本與原生指令對照表：
+| 模組名稱 | PowerShell 腳本 (推薦) | Python 原生指令 | 說明 |
+| :--- | :--- | :--- | :--- |
+| **DHCP 即時監聽** | `.\run_live_monitor.ps1` | `python dhcp_monitor.py` | 實體網卡 UDP 67/68 監聽與即時寫入 |
+| **Web 儀表板服務** | `.\run_web.ps1` | `python app.py` | 啟動 FastAPI 服務，監聽 Port 8000 |
+| **SNMP 交換器輪巡** | `.\scripts\run_snmp_poll.ps1` | `python -m services.snmp_poller` | 依 `config/switches.yaml` 輪詢鄰居與 MAC |
+| **SNMP 單次輪詢測試**| `.\scripts\run_snmp_poll.ps1 -Once` | `python -m services.snmp_poller --once` | 手動執行一次全網設備掃描與拓撲更新 |
+| **立即執行系統維護** | `.\run_maintenance.bat` | `python maintenance.py` | 執行空間預檢、WAL 壓縮與線上備份 |
 
 ---
 
-## 三、 設定檔與資料轉換說明
+## 四、Windows 工作排程器配置 (每日自動維護)
 
-系統主要依賴 `config/settings.yaml`（全域參數）與 `config/switches.yaml`（設備清單）進行初始化。
+為確保 SQLite 資料庫長期穩定與 WAL 檔案體積受控，系統提供工作排程器自動註冊腳本：
 
-### 1. 交換器清單 `config/switches.yaml` 與 Excel 轉換工具
-校園內建置的交換器清單（如 Ruckus、Aruba、Cisco、D-Link 等交換器設備）可透過專屬轉換腳本自動生成：
-* **`[sample_switchs].csv` 轉 YAML 工具**：
-  若您手邊有交換器盤點 CSV，可執行內建腳本自動過濾防火牆並輸出標準格式：
-  ```cmd
-  python config/CSV_toyaml.py
-  ```
-  此指令會自動讀取同目錄下的交換器 CSV，並覆寫產生 `config/switches.yaml`。
+### 1. 註冊自動維護排程 (每日 03:00)
+以系統管理員身分開啟 PowerShell 執行：
+```powershell
+.\register_task_scheduler.ps1
+```
+* **排程名稱**：`DHCP_Analyzer_Daily_Maintenance`
+* **維護內容**：
+  1. 磁碟剩餘空間 5GB 安全防護檢查。
+  2. 30 天以前之原始封包日誌清理（保留長期資產與主檔）。
+  3. WAL `TRUNCATE` 回收 WAL 檔案至 10MB 以下。
+  4. 產出線上熱備份至 `backups/` 資料夾。
 
-* **固定 IP 與資安清單 Excel 轉換工具**：
-  若需將校園固定 IP 清單（`school_ip_list.xlsx`）匯入系統以進行自動 Ping 探測與 ARP 比對，可執行：
-  ```cmd
-  python config/excel_to_csv_converter_v3.py
-  ```
-  此腳本會讀取 Excel，自動執行 Ping 與 `arp -a` 檢索，產出 `devices_import.csv`，後續可透過 `netmon import-devices` 匯入資料庫。
+### 2. 驗證或解除排程
+```powershell
+# 檢視排程狀態
+schtasks /Query /TN "DHCP_Analyzer_Daily_Maintenance" /FO LIST
 
-### 2. 全域設定檔 `config/settings.yaml` 細項參數說明
-```yaml
-app:
-  name: "school-network-monitor"
-  log_level: "INFO"         # 日誌等級 (DEBUG, INFO, WARNING, ERROR)
-  timezone: "Asia/Taipei"   # 系統時區
-
-capture:
-  interface: ""             # Npcap 網卡 GUID 或名稱 (執行 --auto-config 會自動填入)
-  filter: "udp and (port 67 or port 68)" # BPF 封包過濾條件 (僅攔截 DHCP 流量)
-  enabled: false            # 是否隨 background monitor 同時啟動背景監聽
-
-snmp:
-  version: "2c"             # 預設 SNMP 版本 ("2c" 或 "3")
-  timeout_seconds: 3.0      # SNMP 逾時秒數
-  retries: 1                # 逾時重試次數
-  poll_interval_seconds: 300 # 交換器輪詢週期 (秒)
-  community: "public" # 預設 v2c 社群字串
-  v3_user: "mon_user"       # SNMPv3 使用者名稱 (預留)
-  v3_auth_proto: "SHA"      # SNMPv3 驗證協定
-  v3_priv_proto: "AES"      # SNMPv3 加密協定
-
-database:
-  path: "data/network_monitor.db" # SQLite 資料庫檔案路徑
-
-retention:
-  dhcp_events_days: 30      # 歷史 DHCP 事件保留天數
-
-dhcp:
-  authorized_servers:       # 校園授權之合法 DHCP 伺服器 IP 清單 (防範 N01 Rogue DHCP)
-    - "192.168.1.9"
-    - "192.168.1.254"
-    - "192.168.6.41"
-    - "192.168.6.101"
-
-  scope_rules:              # 各電腦教室 Scope 分組與伺服器限制規則 (防範 N02 違規配發)
-    - group_name: "電腦教室-二樓"
-      allowed_servers: ["192.168.6.41"]
-      macs: [...]
+# 解除註冊排程
+.\register_task_scheduler.ps1 -Uninstall
 ```
 
 ---
 
-## 四、 網卡介面自動抓取與執行測試操作
+## 五、Web 儀表板與拓撲視覺化工作站功能
 
-為了確保 Scapy / Npcap 能夠順利在 Windows 11 上擷取封包，系統內建了智慧網卡自動偵測與寫入功能：
+系統啟動 Web 服務後，可透過瀏覽器造訪 `http://127.0.0.1:8000`：
 
-1. **自動偵測實體網卡並寫入設定檔**：
-   執行以下指令，系統會自動掃描所有網卡介面、排除 `0.0.0.0` 與 Loopback，精準鎖定帶有有效實體 IP（例如 `192.168.1.42`）的 Npcap 網卡 GUID（如 `\Device\NPF_{73456D91-2551-4F14-AA3E-F8C558D08E01}`），並自動更新至 `config/settings.yaml` 中：
-   ```cmd
-   netmon listen-dhcp --auto-config
-   ```
-
-2. **手動測試 SNMP 連線**：
-   確認網卡與設定無誤後，可先行測試 15 台交換器的 SNMP 回應狀況：
-   ```cmd
-   netmon check-snmp
-   ```
-
----
-
-## 五、 目前已開發相關指令說明 (CLI Reference)
-
-系統提供完整的 `netmon` 命令列工具，涵蓋網路診斷、持續監控、裝置清冊、拓樸追蹤與資安告警管理：
-
-### 1. 網路與 SNMP 測試
-* **`netmon check-snmp`**：測試指定或全體交換器之 SNMP 連線與 MIB 回應。
-* **`netmon poll-switches`**（或 `poll-fdb`）：手動執行一次交換器 FDB 與介面表採集。
-* **`netmon show-interfaces --switch <IP/Name>`**：檢視特定交換器的連接埠對應與 Uplink 狀態。
-
-### 2. DHCP 監聽指令
-* **`netmon listen-dhcp`**：啟動互動式 DHCP 被動監聽（具備彩色日誌：正常 ACK 綠色、未授權 Rogue DHCP 紅色粗體、Scope 不符桃紅色）。
-* **`netmon listen-dhcp --auto-config`**：自動偵測帶有有效 IP 的實體網卡並寫入 `settings.yaml`。
-
-### 3. 持續監控服務與模組控制
-* **`netmon monitor`**：啟動背景常駐服務（自動排程 SNMP 輪詢、FDB 掃描與 DHCP 背景監聽）。
-* **`netmon monitor --module snmp|anomaly|dhcp`**：單獨啟動指定的監控模組。
-* **`netmon monitor --stop`**：安全停止所有背景監控服務，並將模組狀態更新為 `STOPPED`。
-* **`netmon monitor-health`**：檢視各核心監控模組的目前健康狀態與最後成功時間戳記。
-
-### 4. 設備清冊與定位查詢
-* **`netmon list-devices`**：檢視有線網路設備清冊（支援 `--type`、`--status`、`--assignment` 條件篩選）。
-* **`netmon find-mac <MAC>`**：依 MAC 查詢交換器實體連接埠與定位可信度詳細診斷報告。
-* **`netmon find-ip <IP>`**：依 IP 查詢對應 MAC、租約狀態與交換器連接埠。
-* **`netmon find-device <ID/MAC/IP>`**：綜合查詢設備主檔、歷程 IP 與定位結果。
-* **`netmon verify-mac <MAC> --switch-ip <IP> --port <Port> --note <備註>`**：記錄網管人員實機插線驗證結果（若不符將自動觸發 N08 告警）。
-* **`netmon add-device`** / **`update-device`** / **`import-devices <CSV>`**：手動或批次維護靜態設備清冊。
-
-### 5. 拓樸與路徑追蹤
-* **`netmon poll-lldp`**：採集交換器 LLDP 鄰居資訊。
-* **`netmon discover-topology`**：分析鄰居數據並建立交換器互聯鏈路拓樸。
-* **`netmon show-topology`**：展示交換器主幹互聯架構總表。
-* **`netmon trace-mac <MAC>`**：沿著拓樸路徑追蹤 MAC 的交換器傳遞路由並過濾骨幹。
-
-### 6. 告警管理與報表匯出
-* **`netmon list-alerts`**：列出未結案告警清單（支援 `--status`、`--severity`、`--type` 篩選）。
-* **`netmon show-alert <ID>`**：查看單一告警的詳細資訊、歷次異常證據與狀態變更歷程。
-* **`netmon ack-alert <ID>`** / **`resolve-alert <ID>`** / **`suppress-alert <ID>`**：確認、結案或暫時抑制告警。
-* **`netmon alert-report`**：產出異常統計摘要並匯出至 CSV。
-* **`netmon unmanaged-report`** / **`conflict-report`**：匯出未管理設備報表與 IP 衝突報表。
-* **`netmon export-csv`**：匯出完整設備清冊總表與資安告警 CSV。
+1. **實體拓撲架構工作站 (`/topology`)**：
+   - **Gateway 為 Root 階層水平佈局**：出口防火牆 (L0) $\to$ 核心閘道 Gateway (Root / L1) $\to$ 核心交換器 (L2) $\to$ 校園各棟交換器 (L3) 整齊展開。
+   - **物理防跳動與解鎖拖曳排列**：關閉持續力導向抖動，提供「🔒 佈局已鎖定 / 🔓 解鎖排列」開關，支援拖曳微調並以 LocalStorage 持久化保存座標。
+   - **交換器頻寬線條標準化**：
+     - $\ge$ 10 Gbps：**綠色粗線 (`#10B981`)** (寬度 7.5 px / 0.2cm)。
+     - 1 Gbps ~ 10 Gbps：**橘色線條 (`#F59E0B`)** (寬度 4.5 px)。
+     - $<$ 1 Gbps：**紅色線條 (`#EF4444`)** (寬度 2.0 px)。
+   - **5 大嚴格互斥狀態計數 (MECE)**：
+     - 🟢 正常 (含拓撲) ｜ ⚪ 在線 (孤立無LLDP) ｜ 🟡 Ping在線 (SNMP障礙) ｜ 🔴 實體離線 ｜ 🟣 待設定 (enabled:false)。
+     - 拓撲圖僅呈現已啟用的交換器與核心節點，未啟用設備於清冊明確標記。
+2. **網頁直接設定 `config/switches.yaml` 工具**：
+   - 導航列點擊「🛠️ 交換器設定管理」，可一鍵 Toggle 開關交換器 `enabled` 狀態，亦可直接於網頁編輯 YAML 原始碼儲存生效。
+3. **即時與歷史時間窗電腦設備清冊分析**：
+   - 首頁時間窗一鍵分析（15分、30分、1小時、24小時），採用 WAL 唯讀交易與短逾時防護，查詢絕不阻塞背景封包寫入。
+4. **一鍵定位與側邊排障抽屜**：
+   - 輸入 IP 或 MAC 即時高亮定位交換器與實體 Port，並具備 FDB 與鄰居詳情抽屜。
 
 ---
 
-## 六、 下一階段 Web API 與網頁介面開發規劃
+## 六、命令列操作工具清單 (CLI Reference)
 
-為了順利銜接網頁前端（如儀表板、設備清冊、告警中心、拓樸圖），下一階段建議採用 **FastAPI** 進行後端 API 開發：
-* **直接資料庫與 Repository 串接**：Web 路由無須透過 CLI 子程序，可直接實例化 `NetworkRepository(Database(settings.database.path))` 讀取 `data/network_monitor.db`。
-* **預期提供的 RESTful API 端點**：
-  * `GET /api/dashboard/health`：讀取 `get_all_monitoring_health()`。
-  * `GET /api/dashboard/stats`：讀取 `get_alert_statistics_report()`。
-  * `GET /api/devices`：調用 `list_inventory_devices()`。
-  * `GET /api/alerts`：調用 `list_alerts()` 並支援狀態/類型過濾。
-  * `POST /api/alerts/{id}/status`：調用 `update_alert_status()` 進行線上 Ack/Resolve。
-  * `GET /api/topology/links`：調用 `list_topology_links()` 支援網頁拓樸視覺化。
+透過已安裝至虛擬環境的 `netmon` 指令進行進階除錯：
+
+### 1. 交換器與連線檢測
+* `netmon check-config`：檢查 `settings.yaml` 與 `switches.yaml` 格式。
+* `netmon check-snmp`：測試全體或特定交換器之 SNMP 連線與回應。
+* `netmon poll-neighbors`：採集交換器 FDP 與 LLDP 鄰居資訊。
+* `netmon poll-switches`：採集交換器介面表與 FDB MAC 表。
+
+### 2. 設備查詢與實體定位
+* `netmon find-mac <MAC>`：查詢指定 MAC 插在哪一台交換器、哪一個 Port。
+* `netmon find-ip <IP>`：查詢指定 IP 之實體位置與租約狀態。
+* `netmon list-devices`：檢視有線網路設備清冊與連線資訊。
+
+### 3. 五大故障診斷與告警
+* `netmon detect-anomalies`：手動觸發一次全網五大故障診斷掃描（Rogue DHCP、IP 衝突、Pool 耗盡、廣播風暴、SNMP 社群字串錯誤）。
+* `netmon list-alerts`：檢視當前未結案之故障告警清單。
+* `netmon db-backup`：手動執行 SQLite 線上安全熱備份。
+
+---
+
+## 七、後續待開發與功能演進藍圖 (Roadmap)
+
+依據架構書第 12.4 節，後續系統演化與擴充計畫如下：
+
+| 優先級 | 規劃項目 | 效益與目標架構 | 預計工作範圍 |
+| :---: | :--- | :--- | :--- |
+| **P1** | **SNMPv3 安全加密通訊支援** | 提升校園資安防護，支援 AuthPriv (SHA/AES) 認證與加密，逐步淘汰明文 Community。 | 擴充 `SNMPClient` 與 `switches.yaml` 參數支援 `user`, `auth_key`, `priv_key`。 |
+| **P2** | **802.1Q 實體 Tagging 與 Trunk 辨識擴充** | 突破現有 Relay-Only 限制，直接透過 SNMP 採集交換器 `dot1qVlanCurrentTable` 與各 Port 的 Native/Trunk VLAN。 | 於 `services/snmp_poller.py` 增加 VLAN MIB 採集器並存入 `switch_vlan_members`。 |
+| **P3** | **多元外部即時告警推播 (Webhook)** | 當偵測到私設 DHCP (Rogue DHCP) 或跨棟環路廣播風暴時，秒級推播通知網管。 | 實作 LINE Notify / Telegram Bot / Teams Webhook 模組，於 `anomaly_engine.py` 觸發。 |
+| **P4** | **實體拓撲變更歷史日誌 (Topology Diff)** | 記錄校園骨幹斷線、跳線變更或交換器重啟之時間軸歷史比對。 | 新增 `topology_history` 資料表，週期性快照鄰居關係並提供版本 Diff 視圖。 |
+| **P5** | **多子網 DHCP Option 43/ Option 60 設備特徵庫** | 針對教室觸控大屏 (ViewBoard)、IP 攝影機、無線 AP 等自動標註設備型號。 | 解析 Option 60 (Vendor Class Identifier) 並自動補齊 `devices.device_name`。 |
